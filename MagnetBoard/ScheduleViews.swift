@@ -64,6 +64,9 @@ struct SchedulePlannerView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     PlanContextBanner()
+                    // Keep the drag source and destinations together on a phone.
+                    unscheduledStrip
+                    dropTargets
                     DaySummaryCard(
                         events: scheduleViewModel.events(on: selectedDate),
                         travelLegStatuses: travelLegStatuses,
@@ -77,10 +80,8 @@ struct SchedulePlannerView: View {
                         preferredDayStartHour: preferredDayStartHour,
                         preferredDayEndHour: preferredDayEndHour
                     )
-                    unscheduledStrip
                     sequenceRulesView
                     warningsView
-                    dropTargets
                     scheduledList
                     routeMap
                 }
@@ -770,6 +771,7 @@ struct ScheduleDropZone: View {
                 .fill(isTargeted ? Color.accentColor.opacity(0.18) : dropZoneWash)
         )
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(isTargeted ? Color.accentColor : dropZoneTint.opacity(0.25), lineWidth: isTargeted ? 2 : 0.8))
+        .contentShape(Rectangle())
         .onDrop(of: [PlannerDragPayload.idea], isTargeted: $isTargeted) { providers in
             handleDrop(providers)
         }

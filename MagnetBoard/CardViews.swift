@@ -19,6 +19,7 @@ struct MagnetCardView: View {
     @ViewBuilder private var visibleCard: some View {
         if mode == .compact {
             cardBody
+                .contentShape(Rectangle())
                 .onDrag {
                     PlannerDragPayload.provider(for: idea.id, type: PlannerDragPayload.idea)
                 } preview: {

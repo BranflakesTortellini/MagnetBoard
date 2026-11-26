@@ -93,6 +93,7 @@ final class CardJourneyTests: XCTestCase {
         let end = origin.withOffset(CGVector(dx: destination.x - app.frame.minX, dy: destination.y - app.frame.minY))
         print("Dragging the new card from \(sourcePoint) to the Morning basket at \(destination)")
         start.press(forDuration: 1.0, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.6)
+        print("After drop: tray still has card: \(source.exists); Morning row: \(elements["planned.card.\(id)"].exists)")
         let scheduled = elements["planned.card.\(id)"]
         reveal([scheduled], in: scroll)
         XCTAssertTrue(scheduled.label.contains(title) && scheduled.label.contains("Morning"),
@@ -113,8 +114,16 @@ final class CardJourneyTests: XCTestCase {
     private func reveal(_ items: [XCUIElement], in scroll: XCUIElement,
                         file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(scroll.waitForExistence(timeout: 8), file: file, line: line)
+        let app = XCUIApplication()
+        let window = app.frame
+        let bottom = app.tabBars.firstMatch.frame.minY
+        let top = max(window.minY, app.navigationBars.firstMatch.frame.maxY)
+        let unobscured = CGRect(x: window.minX, y: top, width: window.width, height: bottom - top)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
         for _ in 0..<18 {
-            let visible = scroll.frame.insetBy(dx: 4, dy: 16)
+            // SwiftUI's scroll frame can extend underneath the bottom tab bar.
+            // Keep a further margin so a drag does not trigger edge autoscroll.
+            let visible = scroll.frame.intersection(unobscured).insetBy(dx: 6, dy: 36)
             let frames = items.compactMap { item -> CGRect? in
                 guard item.exists, !item.frame.isEmpty else { return nil }
                 return item.frame
@@ -123,11 +132,13 @@ final class CardJourneyTests: XCTestCase {
                 return
             }
             let above = frames.contains { $0.midY < visible.minY }
-            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: above ? 0.38 : 0.65))
+            let start = origin.withOffset(CGVector(dx: visible.maxX - window.minX - 6,
+                                                   dy: visible.midY - window.minY))
             let end = start.withOffset(CGVector(dx: 0, dy: above ? 100 : -100))
             start.press(forDuration: 0.02, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.15)
         }
-        XCTFail("Could not bring the requested elements into view", file: file, line: line)
+        print(app.debugDescription)
+        XCTFail("Could not bring the requested elements above the tab bar", file: file, line: line)
     }
 }
 
