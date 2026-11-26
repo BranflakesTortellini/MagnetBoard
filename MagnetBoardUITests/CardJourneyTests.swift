@@ -61,25 +61,37 @@ final class CardJourneyTests: XCTestCase {
                                "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         XCUIDevice.shared.orientation = .portrait
         app.launch()
-        let title = "Gallery \(UUID().uuidString.prefix(8))"
+        let title = "Gallery \(Int.random(in: 100000...999999))"
         let elements = app.descendants(matching: .any)
         let add = app.buttons["board.newIdea"]
         XCTAssertTrue(add.waitForExistence(timeout: 15), "Board did not open")
         add.tap()
         let field = app.textFields["newIdea.title"]
-        // The template gallery may push the field below the fold.
-        for _ in 0..<5 where !field.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(field.waitForExistence(timeout: 12))
         XCTAssertTrue(field.isHittable, "Could not reach the new-card title")
         field.tap()
         field.typeText(title)
-        app.buttons["newIdea.save"].tap()
+        XCTAssertEqual(field.value as? String, title, "The title field did not accept the requested name")
+        let save = app.buttons["newIdea.save"]
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(add.waitForExistence(timeout: 15), "Saving did not return to the board")
 
         let boardCard = elements.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@",
                                                        "board.card.", title)).firstMatch
-        XCTAssertTrue(boardCard.waitForExistence(timeout: 8), "Added card did not appear on the board")
+        let canvas = app.scrollViews["board.canvas"]
+        if !boardCard.waitForExistence(timeout: 10) {
+            // Persisted board locations can put a newly added card below the viewport.
+            let edge = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.75))
+            edge.press(forDuration: 0.02, thenDragTo: edge.withOffset(CGVector(dx: 0, dy: -160)))
+        }
+        guard boardCard.waitForExistence(timeout: 10) else {
+            print(app.debugDescription)
+            XCTFail("Saved card named \(title) did not appear on the board")
+            return
+        }
         let id = String(boardCard.identifier.dropFirst("board.card.".count))
         XCTAssertNotNil(UUID(uuidString: id))
-        let canvas = app.scrollViews["board.canvas"]
         reveal([boardCard], in: canvas)
         XCTAssertEqual(boardCard.value as? String, "Ideas")
         let center = boardCard.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))

@@ -35,6 +35,10 @@ struct AddIdeaView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    TextField("Title, e.g. Saturday market", text: $title)
+                        .accessibilityIdentifier("newIdea.title")
+                }
                 Section("Quick start") {
                     Text("Tap one of these, or write your own card below.")
                         .font(.caption)
@@ -57,8 +61,6 @@ struct AddIdeaView: View {
                 }
 
                 Section("Card basics") {
-                    TextField("Title, e.g. Saturday market", text: $title)
-                        .accessibilityIdentifier("newIdea.title")
                     Picker("How real is this?", selection: $commitment) {
                         Text(CardCommitment.loose.label).tag(CardCommitment.loose)
                         Text(CardCommitment.detailed.label).tag(CardCommitment.detailed)
