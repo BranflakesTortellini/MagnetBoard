@@ -46,9 +46,16 @@ public final class BoardViewModel: ObservableObject {
         item.commitment = commitment
         item.group = group
         item.priority = priority
+        insertIdea(item)
+    }
+
+    @discardableResult
+    func insertIdea(_ idea: IdeaItem) -> IdeaItem {
+        var item = idea
         item.boardX = Double.random(in: 120...320)
         item.boardY = Double.random(in: 120...520)
         ideas.append(item)
+        return item
     }
 
     public func updateIdea(_ updated: IdeaItem) {

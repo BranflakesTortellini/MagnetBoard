@@ -19,6 +19,7 @@ struct SchedulePlannerView: View {
     @State private var showClearBurst = false
     @State private var travelRefreshID = UUID()
     @State private var selectedTrayCard: UUID?
+    @State private var choosingCardFor: TrayBasket?
     @State private var basketFrames: [TrayBasket: CGRect] = [:]
     @State private var trayDrag: TrayDrag?
 
@@ -67,14 +68,12 @@ struct SchedulePlannerView: View {
             .pickerStyle(.segmented)
             .padding(.horizontal)
 
-            PlanQuickHelp()
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    PlanContextBanner()
                     // Keep the drag source and destinations together on a phone.
                     unscheduledStrip
                     dropTargets
+                    scheduledList
                     DaySummaryCard(
                         events: scheduleViewModel.events(on: selectedDate),
                         travelLegStatuses: travelLegStatuses,
@@ -90,14 +89,26 @@ struct SchedulePlannerView: View {
                     )
                     sequenceRulesView
                     warningsView
-                    scheduledList
                     routeMap
+                    PlanContextBanner()
                 }
                 .padding()
             }
             .accessibilityIdentifier("plan.scroll")
         }
         .coordinateSpace(name: TrayBasket.space)
+        .onChange(of: selectedDate) { _, _ in selectedTrayCard = nil }
+        .sheet(item: $choosingCardFor) { basket in
+            PlanCardPicker(basketTitle: basket.title, date: selectedDate, ideas: boardViewModel.ideas,
+                           availableIDs: Set(trayIdeas.map(\.id))) { id in
+                choosingCardFor = nil
+                scheduleTrayCard(id, in: basket)
+            } onCreate: { title in
+                choosingCardFor = nil
+                let card = boardViewModel.insertIdea(IdeaItem(title: title))
+                scheduleTrayCard(card.id, in: basket)
+            }
+        }
         .onPreferenceChange(BasketFramesKey.self) { basketFrames = $0 }
         .overlay(alignment: .topLeading) {
             if let trayDrag {
@@ -124,20 +135,25 @@ struct SchedulePlannerView: View {
         }
     }
 
+    private var trayIdeas: [IdeaItem] {
+        boardViewModel.ideas.filter { idea in
+            idea.allowsMultipleScheduledInstances ||
+                (idea.commitment != .locked && !scheduleViewModel.hasScheduledInstance(for: idea.id))
+        }
+    }
+
     private var unscheduledStrip: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Card tray")
                 .font(.headline)
-            Text(selectedTrayCard == nil ? "Hold and drag a card, or tap it and choose a basket." : "Tap a basket to place the selected card.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if let selected = trayIdeas.first(where: { $0.id == selectedTrayCard }) {
+                Text("Choose a time for \(selected.title)")
+                    .font(.subheadline.weight(.medium))
+            }
 
             ScrollView(.horizontal) {
                 HStack(spacing: 12) {
-                    ForEach(boardViewModel.ideas.filter { idea in
-                        idea.allowsMultipleScheduledInstances ||
-                        (idea.commitment != .locked && !scheduleViewModel.hasScheduledInstance(for: idea.id))
-                    }) { idea in
+                    ForEach(trayIdeas) { idea in
                         let card = MagnetCardView(idea: idea, mode: .compact)
                         card
                             .accessibilityHidden(true)
@@ -170,15 +186,21 @@ struct SchedulePlannerView: View {
         }
     }
 
-    private func basketView(_ basket: TrayBasket, title: String, subtitle: String) -> some View {
+    private func basketView(_ basket: TrayBasket, subtitle: String) -> some View {
         Button {
-            if let id = selectedTrayCard { scheduleTrayCard(id, in: basket) }
+            if let id = selectedTrayCard, trayIdeas.contains(where: { $0.id == id }) {
+                scheduleTrayCard(id, in: basket)
+            } else {
+                selectedTrayCard = nil
+                choosingCardFor = basket
+            }
         } label: {
-            ScheduleDropZone(basket: basket, title: title, subtitle: subtitle,
+            ScheduleDropZone(basket: basket, title: basket.title, subtitle: subtitle,
                          isTargeted: trayDrag.map { basketFrames[basket]?.contains($0.location) == true } ?? false)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityHint(selectedTrayCard == nil ? "Choose or create a card for this time." : "Place the selected card here.")
         .accessibilityIdentifier("drop.\(basket.rawValue)")
         .background(GeometryReader { proxy in
             Color.clear.preference(key: BasketFramesKey.self, value: [basket: proxy.frame(in: .named(TrayBasket.space))])
@@ -197,6 +219,20 @@ struct SchedulePlannerView: View {
             boardViewModel.markScheduled(id, locked: hasLockedPlacement)
             selectedTrayCard = nil
             Haptics.success()
+            undoViewModel.register(title: "Added to \(basket.title)", message: idea.title,
+                                   systemImage: "calendar.badge.checkmark", autoDismissSeconds: 15) {
+                guard scheduleViewModel.events.contains(where: { $0.id == event.id }) else { return }
+                scheduleViewModel.deleteEvent(event)
+                if !scheduleViewModel.hasScheduledInstance(for: id),
+                   var current = boardViewModel.ideas.first(where: { $0.id == id }) {
+                    // Restore planning state without rolling back unrelated card edits.
+                    if current.group == .scheduledSoon { current.group = idea.group }
+                    current.commitment = idea.commitment
+                    boardViewModel.updateIdea(current)
+                } else {
+                    refreshBoardCommitments(for: [event])
+                }
+            }
         case .duplicateNotAllowed(let existing):
             Haptics.warning()
             let day = existing.startDate.formatted(date: .abbreviated, time: .omitted)
@@ -250,19 +286,16 @@ struct SchedulePlannerView: View {
 
     private var dropTargets: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Drop into the day")
+            Text("Add to day")
                 .font(.headline)
-            Text("These are soft baskets first. Use Must happen today when the timing is flexible but the card matters.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             HStack(spacing: 10) {
-                basketView(.morning, title: "Morning", subtitle: "rough, not exact")
-                basketView(.afternoon, title: "Afternoon", subtitle: "rough, not exact")
-                basketView(.evening, title: "Evening", subtitle: "rough, not exact")
+                basketView(.morning, subtitle: "rough, not exact")
+                basketView(.afternoon, subtitle: "rough, not exact")
+                basketView(.evening, subtitle: "rough, not exact")
             }
             HStack(spacing: 10) {
-                basketView(.dayOnly, title: "Sometime today", subtitle: "nice if it fits")
-                basketView(.mustDo, title: "Must happen today", subtitle: "flexible, but important")
+                basketView(.dayOnly, subtitle: "flexible")
+                basketView(.mustDo, subtitle: "flexible, but important")
             }
         }
     }
@@ -271,7 +304,7 @@ struct SchedulePlannerView: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Today’s flow")
+                    Text(Calendar.current.isDateInToday(selectedDate) ? "Today’s flow" : "Day’s flow")
                         .font(.headline)
                     Spacer()
                     Menu {
@@ -314,7 +347,7 @@ struct SchedulePlannerView: View {
                         .foregroundStyle(.secondary)
                     Text("No cards in the day yet")
                         .font(.headline)
-                    Text("Drag a card from the tray into a soft basket above.")
+                    Text("Choose a time above to add your first card.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -588,26 +621,6 @@ struct SchedulePlannerView: View {
 }
 
 
-struct PlanQuickHelp: View {
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "hand.draw")
-                .font(.title3)
-                .foregroundStyle(Color.accentColor)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Rough first. Exact later.")
-                    .font(.subheadline.weight(.semibold))
-                Text("Drop cards into broad parts of the day. Use exact times only for real commitments.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(SystemPalette.groupedBackground)
-    }
-}
-
 
 struct DaySummaryCard: View {
     let events: [EventItem]
@@ -812,9 +825,11 @@ struct SummaryPill: View {
     }
 }
 
-private enum TrayBasket: String, Hashable {
+private enum TrayBasket: String, Hashable, Identifiable {
     case morning, afternoon, evening, dayOnly, mustDo
     static let space = "planner-tray-and-baskets"
+    var id: Self { self }
+    var title: String { dayPart?.label ?? (self == .mustDo ? "Must happen" : "Any time") }
     var dayPart: DayPart? { DayPart(rawValue: rawValue) }
     var precision: SchedulePrecision { dayPart == nil ? .dayOnly : .dayPart }
     var hour: Int { dayPart?.proxyHour ?? (self == .mustDo ? 11 : 12) }

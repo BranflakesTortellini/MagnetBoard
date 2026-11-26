@@ -73,20 +73,6 @@ struct FreeBoardView: View {
         .onChange(of: liftedIdeaID) { _, lifted in
             if lifted != nil { Haptics.lightImpact() }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button {
-                    boardViewModel.tidyBoardByPlanningState()
-                } label: {
-                    Label("Tidy", systemImage: "wand.and.stars")
-                }
-                Button {
-                    showingAddIdea = true
-                } label: {
-                    Label("Add", systemImage: "plus")
-                }
-            }
-        }
         .sheet(item: $selectedIdea) { idea in
             IdeaDetailView(idea: idea)
         }

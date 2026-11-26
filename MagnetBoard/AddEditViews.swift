@@ -25,6 +25,11 @@ struct AddIdeaView: View {
     @State private var commitment: CardCommitment = .loose
     @State private var group: BoardGroup = .ideas
     @State private var priority = 2
+    @FocusState private var titleFocused: Bool
+
+    private var canAdd: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (!includeCost || enteredCost != nil)
+    }
 
     private var enteredCost: Double? {
         guard let amount = Double(cost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -37,12 +42,12 @@ struct AddIdeaView: View {
             Form {
                 Section {
                     TextField("Title, e.g. Saturday market", text: $title)
+                        .focused($titleFocused)
+                        .submitLabel(.done)
+                        .onSubmit { addCard() }
                         .accessibilityIdentifier("newIdea.title")
                 }
                 Section("Quick start") {
-                    Text("Tap one of these, or write your own card below.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                         TemplateButton(title: "Coffee stop", systemImage: "cup.and.saucer") { applyTemplate(title: "Coffee stop", category: .snackCoffee, repeatable: true, durationMinutes: 30, group: .ideas) }
                         TemplateButton(title: "Fun dinner", systemImage: "fork.knife") { applyTemplate(title: "Fun dinner", category: .fullMeal, repeatable: false, durationMinutes: 90, group: .maybe) }
@@ -159,6 +164,7 @@ struct AddIdeaView: View {
                 }
             }
             .navigationTitle("New idea")
+            .onAppear { titleFocused = true }
             .sheet(isPresented: $showingLocationSearch) {
                 LocationSearchSheet(initialQuery: locationName) { result in
                     locationName = result.name
@@ -177,8 +183,7 @@ struct AddIdeaView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") { addCard() }
                         .accessibilityIdentifier("newIdea.save")
-                        .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                  (includeCost && enteredCost == nil))
+                        .disabled(!canAdd)
                 }
             }
         }
@@ -203,6 +208,7 @@ struct AddIdeaView: View {
     }
 
     private func addCard() {
+        guard isPresented, canAdd else { return }
         let coordinate: CLLocationCoordinate2D?
         if let selectedCoordinate {
             coordinate = selectedCoordinate

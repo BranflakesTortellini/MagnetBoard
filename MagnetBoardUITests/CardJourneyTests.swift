@@ -2,6 +2,77 @@ import XCTest
 
 final class CardJourneyTests: XCTestCase {
     @MainActor
+    func testBasketFirstCreatesCardAndBlocksDuplicate() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-welcome.hasSeenMagnetBoardIntro", "YES", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        app.tabBars.buttons["Plan"].tap()
+        let scroll = app.scrollViews["plan.scroll"]
+        let evening = app.buttons["drop.evening"]
+        reveal([evening], in: scroll)
+        evening.tap()
+        let input = app.textFields["planPicker.title"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10))
+        let title = "Lakeside \(Int.random(in: 100000...999999))"
+        input.tap()
+        input.typeText(title + "\n")
+
+        let placed = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@ AND label CONTAINS %@",
+            "planned.card.", title, "Evening")).firstMatch
+        reveal([placed], in: scroll)
+        let id = String(placed.identifier.dropFirst("planned.card.".count))
+        reveal([evening], in: scroll)
+        evening.tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 10))
+        input.tap()
+        input.typeText(title)
+        let existing = app.buttons["planPicker.card.\(id)"]
+        XCTAssertTrue(existing.waitForExistence(timeout: 8))
+        XCTAssertFalse(existing.isEnabled, "One-off placement was offered a second time")
+        XCTAssertFalse(app.buttons["planPicker.create"].exists, "An existing name was offered as a new card")
+        app.buttons["Cancel"].tap()
+        app.terminate()
+        app.launch()
+        app.tabBars.buttons["Plan"].tap()
+        reveal([placed], in: scroll)
+        XCTAssertTrue(placed.label.contains(title), "Quick-added placement was lost on relaunch")
+    }
+
+    @MainActor
+    func testPickBoardCardFromBasketThenUndo() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-welcome.hasSeenMagnetBoardIntro", "YES", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        app.tabBars.buttons["Plan"].tap()
+        let scroll = app.scrollViews["plan.scroll"]
+        let morning = app.buttons["drop.morning"]
+        reveal([morning], in: scroll)
+        morning.tap()
+        let field = app.textFields["planPicker.title"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        field.tap()
+        field.typeText("Wunderland")
+        let museum = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                                                       "planPicker.card.", "Miniatur Wunderland")).firstMatch
+        let id = String(museum.identifier.dropFirst("planPicker.card.".count))
+        museum.tap()
+        let undo = app.buttons["Undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 10))
+        undo.tap()
+        morning.tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        field.tap()
+        field.typeText("Wunderland")
+        let restored = app.buttons["planPicker.card.\(id)"]
+        XCTAssertTrue(restored.isEnabled, "Undo did not return the original one-off card to the available list")
+        app.buttons["Cancel"].tap()
+        XCTAssertFalse(app.descendants(matching: .any)["planned.card.\(id)"].exists)
+    }
+
+    @MainActor
     func testTapToScheduleRepeatableCard() {
         continueAfterFailure = false
         let app = XCUIApplication()
