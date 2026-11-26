@@ -122,6 +122,11 @@ struct SchedulePlannerView: View {
                     }) { idea in
                         MagnetCardView(idea: idea, mode: .compact)
                             .accessibilityIdentifier("tray.card.\(idea.id.uuidString)")
+                            .contentShape(Rectangle())
+                            .draggable(TrayCardTransfer(ideaID: idea.id)) {
+                                MagnetCardView(idea: idea, mode: .dragPreview)
+                                    .onAppear { TrayCardTransfer.trace("Card lift preview") }
+                            }
                     }
                 }
                 .padding(.vertical, 4)
@@ -771,12 +776,17 @@ struct ScheduleDropZone: View {
                 .fill(isTargeted ? Color.accentColor.opacity(0.18) : dropZoneWash)
         )
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(isTargeted ? Color.accentColor : dropZoneTint.opacity(0.25), lineWidth: isTargeted ? 2 : 0.8))
-        .contentShape(Rectangle())
-        .onDrop(of: [PlannerDragPayload.idea], isTargeted: $isTargeted) { providers in
-            handleDrop(providers)
-        }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("drop.\(dayPart?.rawValue ?? (forceMustDo ? "mustDo" : "dayOnly"))")
+        .contentShape(Rectangle())
+        .dropDestination(for: TrayCardTransfer.self) { cards, _ in
+            guard let card = cards.first else { return false }
+            TrayCardTransfer.trace("Received a typed tray card")
+            return schedule(card.ideaID)
+        } isTargeted: { targeted in
+            isTargeted = targeted
+            if targeted { TrayCardTransfer.trace("Entered scheduling basket") }
+        }
         .alert("Could not schedule card", isPresented: Binding(
             get: { dropNotice != nil },
             set: { if !$0 { dropNotice = nil } }
@@ -810,32 +820,24 @@ struct ScheduleDropZone: View {
         }
     }
 
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        PlannerDragPayload.loadID(from: providers, type: PlannerDragPayload.idea) { uuid in
-            guard let idea = boardViewModel.ideas.first(where: { $0.id == uuid }),
-                  idea.commitment != .locked || idea.allowsMultipleScheduledInstances else { return }
-            let start = scheduleViewModel.firstOpenSlot(
-                on: selectedDate,
-                preferredHour: hour,
-                duration: idea.duration ?? 60 * 60
-            )
-            let result = scheduleViewModel.scheduleIdea(
-                idea,
-                startDate: start,
-                schedulePrecision: targetPrecision,
-                dayPart: dayPart
-            )
-            switch result {
-            case .scheduled(let event):
-                if forceMustDo, !event.isMustDo { scheduleViewModel.setMustDo(event, true) }
-                Haptics.success()
-                let hasLockedPlacement = scheduleViewModel.events.contains { $0.ideaID == idea.id && $0.isLocked }
-                boardViewModel.markScheduled(idea.id, locked: hasLockedPlacement)
-            case .duplicateNotAllowed(let existing):
-                Haptics.warning()
-                let day = existing.startDate.formatted(date: .abbreviated, time: .omitted)
-                dropNotice = "\(idea.title) is already in the plan for \(day). Turn on ‘Can use this more than once’ in the card details if that is intentional."
-            }
+    private func schedule(_ uuid: UUID) -> Bool {
+        guard let idea = boardViewModel.ideas.first(where: { $0.id == uuid }),
+              idea.commitment != .locked || idea.allowsMultipleScheduledInstances else { return false }
+        let start = scheduleViewModel.firstOpenSlot(
+            on: selectedDate, preferredHour: hour, duration: idea.duration ?? 60 * 60
+        )
+        switch scheduleViewModel.scheduleIdea(idea, startDate: start, schedulePrecision: targetPrecision, dayPart: dayPart) {
+        case .scheduled(let event):
+            if forceMustDo, !event.isMustDo { scheduleViewModel.setMustDo(event, true) }
+            Haptics.success()
+            let hasLockedPlacement = scheduleViewModel.events.contains { $0.ideaID == idea.id && $0.isLocked }
+            boardViewModel.markScheduled(idea.id, locked: hasLockedPlacement)
+            return true
+        case .duplicateNotAllowed(let existing):
+            Haptics.warning()
+            let day = existing.startDate.formatted(date: .abbreviated, time: .omitted)
+            dropNotice = "\(idea.title) is already in the plan for \(day). Turn on ‘Can use this more than once’ in the card details if that is intentional."
+            return false
         }
     }
 }

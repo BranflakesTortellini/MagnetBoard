@@ -52,6 +52,14 @@ jobs:
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/CardJourney.xcresult" > "$RUNNER_TEMP/ui-summary.json"
           python3 -c 'import json, sys; s=json.load(open(sys.argv[1])); print(s); sys.exit(0 if s["passedTests"] == 2 and s["failedTests"] == 0 else 1)' "$RUNNER_TEMP/ui-summary.json"
 
+      - name: Show drag diagnostics on UI test failure
+        if: failure() && env.IPHONE_UDID != ''
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          xcrun simctl spawn "$IPHONE_UDID" log show --last 25m --style compact \
+            --predicate 'subsystem == "chrysalis.MagnetBoard" AND category == "TrayDrop"'
+
       - name: Verify bundled Calendar and drag declarations
         run: |
           info="$RUNNER_TEMP/magnetboard-derived-data/Build/Products/Debug-iphonesimulator/MagnetBoard.app/Info.plist"

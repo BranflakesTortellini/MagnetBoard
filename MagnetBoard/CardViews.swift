@@ -10,24 +10,10 @@ struct MagnetCardView: View {
     let mode: MagnetCardMode
 
     var body: some View {
-        visibleCard
+        cardBody
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabelText)
             .accessibilityHint(accessibilityHintText)
-    }
-
-    @ViewBuilder private var visibleCard: some View {
-        if mode == .compact {
-            cardBody
-                .contentShape(Rectangle())
-                .onDrag {
-                    PlannerDragPayload.provider(for: idea.id, type: PlannerDragPayload.idea)
-                } preview: {
-                    MagnetCardView(idea: idea, mode: .dragPreview)
-                }
-        } else {
-            cardBody
-        }
     }
 
     private var cardBody: some View {
