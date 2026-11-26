@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 // MARK: - Shared Card UI
 
@@ -161,7 +162,7 @@ struct MagnetCardView: View {
         }
     }
 
-    private var accessibilityLabelText: String {
+    var accessibilityLabelText: String {
         var parts = [idea.title, idea.commitment.label]
         if idea.category != .unspecified { parts.append(idea.category.label) }
         if let duration = idea.duration { parts.append(formatDuration(duration)) }
@@ -177,6 +178,54 @@ struct MagnetCardView: View {
         if idea.category != .unspecified { bits.append(idea.category.label) }
         if let firstTag = idea.tags.first { bits.append("#\(firstTag)") }
         return bits
+    }
+}
+
+/// A native button lets the enclosing scroll views handle immediate swipes.
+/// Only a stationary hold starts a drag; a normal tap selects the card.
+struct TrayCardControl: UIViewRepresentable {
+    let label: String
+    let id: UUID
+    let selected: Bool
+    let tap: () -> Void
+    let moved: (CGPoint?) -> Void
+    let released: (CGPoint) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .custom)
+        button.isAccessibilityElement = true
+        button.addTarget(context.coordinator, action: #selector(Coordinator.tapCard), for: .touchUpInside)
+        let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.hold(_:)))
+        hold.minimumPressDuration = 0.35
+        button.addGestureRecognizer(hold)
+        return button
+    }
+
+    func updateUIView(_ button: UIButton, context: Context) {
+        context.coordinator.control = self
+        button.accessibilityIdentifier = "tray.card.\(id.uuidString)"
+        button.accessibilityLabel = label
+        button.accessibilityHint = "Tap to select, then tap a basket. Or hold and drag to a basket."
+        button.accessibilityTraits = selected ? [.button, .selected] : [.button]
+    }
+
+    @MainActor final class Coordinator: NSObject {
+        var control: TrayCardControl
+        init(_ control: TrayCardControl) { self.control = control }
+        @objc func tapCard() { control.tap() }
+        @objc func hold(_ gesture: UILongPressGestureRecognizer) {
+            // The point remains relative to the source even after the finger
+            // moves outside the horizontal tray, until release or cancellation.
+            let point = gesture.location(in: gesture.view)
+            switch gesture.state {
+            case .began, .changed: control.moved(point)
+            case .ended: control.released(point)
+            case .cancelled, .failed: control.moved(nil)
+            default: break
+            }
+        }
     }
 }
 

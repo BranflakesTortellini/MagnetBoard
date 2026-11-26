@@ -20,7 +20,7 @@ struct SchedulePlannerView: View {
     @State private var travelRefreshID = UUID()
     @State private var selectedTrayCard: UUID?
     @State private var basketFrames: [TrayBasket: CGRect] = [:]
-    @GestureState private var trayDrag: TrayDrag?
+    @State private var trayDrag: TrayDrag?
 
     private struct TrayDrag {
         let idea: IdeaItem
@@ -138,16 +138,29 @@ struct SchedulePlannerView: View {
                         idea.allowsMultipleScheduledInstances ||
                         (idea.commitment != .locked && !scheduleViewModel.hasScheduledInstance(for: idea.id))
                     }) { idea in
-                        MagnetCardView(idea: idea, mode: .compact)
+                        let card = MagnetCardView(idea: idea, mode: .compact)
+                        card
+                            .accessibilityHidden(true)
                             .overlay(RoundedRectangle(cornerRadius: 20).stroke(
-                                selectedTrayCard == idea.id ? Color.accentColor : .clear, lineWidth: 2))
-                            .accessibilityAddTraits(.isButton)
-                            .accessibilityAddTraits(selectedTrayCard == idea.id ? .isSelected : [])
-                            .accessibilityIdentifier("tray.card.\(idea.id.uuidString)")
-                            .contentShape(Rectangle())
-                            .gesture(trayMoveGesture(for: idea))
-                            .onTapGesture {
-                                selectedTrayCard = selectedTrayCard == idea.id ? nil : idea.id
+                                selectedTrayCard == idea.id ? Color.accentColor : .clear, lineWidth: 2).allowsHitTesting(false))
+                            .overlay {
+                                GeometryReader { proxy in
+                                    let origin = proxy.frame(in: .named(TrayBasket.space)).origin
+                                    TrayCardControl(label: card.accessibilityLabelText, id: idea.id,
+                                                    selected: selectedTrayCard == idea.id) {
+                                        selectedTrayCard = selectedTrayCard == idea.id ? nil : idea.id
+                                        PlannerDragPayload.trace("Tapped tray card")
+                                    } moved: { point in
+                                        trayDrag = point.map { TrayDrag(idea: idea, location: CGPoint(x: origin.x + $0.x, y: origin.y + $0.y)) }
+                                    } released: { point in
+                                        let location = CGPoint(x: origin.x + point.x, y: origin.y + point.y)
+                                        trayDrag = nil
+                                        let basket = basketFrames.first(where: { $0.value.contains(location) })?.key
+                                        PlannerDragPayload.trace(basket == nil ? "Released outside baskets" : "Released inside basket")
+                                        if let basket { scheduleTrayCard(idea.id, in: basket) }
+                                    }
+                                    .frame(width: proxy.size.width, height: proxy.size.height)
+                                }
                             }
                     }
                 }
@@ -157,35 +170,19 @@ struct SchedulePlannerView: View {
         }
     }
 
-    // Both the gesture and the measured basket rectangles use the planner's
-    // coordinate space, even when the vertical plan and horizontal tray scroll.
-    private func trayMoveGesture(for idea: IdeaItem) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.25)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(TrayBasket.space)))
-            .updating($trayDrag) { value, state, _ in
-                if case .second(true, let drag?) = value {
-                    state = TrayDrag(idea: idea, location: drag.location)
-                }
-            }
-            .onEnded { value in
-                guard case .second(true, let drag?) = value, drag.translation != .zero else { return }
-                let basket = basketFrames.first(where: { $0.value.contains(drag.location) })?.key
-                PlannerDragPayload.trace(basket == nil ? "Released outside baskets" : "Released inside basket")
-                if let basket { scheduleTrayCard(idea.id, in: basket) }
-            }
-    }
-
     private func basketView(_ basket: TrayBasket, title: String, subtitle: String) -> some View {
-        ScheduleDropZone(basket: basket, title: title, subtitle: subtitle,
+        Button {
+            if let id = selectedTrayCard { scheduleTrayCard(id, in: basket) }
+        } label: {
+            ScheduleDropZone(basket: basket, title: title, subtitle: subtitle,
                          isTargeted: trayDrag.map { basketFrames[basket]?.contains($0.location) == true } ?? false)
-            .background(GeometryReader { proxy in
-                Color.clear.preference(key: BasketFramesKey.self, value: [basket: proxy.frame(in: .named(TrayBasket.space))])
-            })
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if let id = selectedTrayCard { scheduleTrayCard(id, in: basket) }
-            }
-            .accessibilityAddTraits(.isButton)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("drop.\(basket.rawValue)")
+        .background(GeometryReader { proxy in
+            Color.clear.preference(key: BasketFramesKey.self, value: [basket: proxy.frame(in: .named(TrayBasket.space))])
+        })
     }
 
     private func scheduleTrayCard(_ id: UUID, in basket: TrayBasket) {
@@ -856,7 +853,6 @@ private struct ScheduleDropZone: View {
         )
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(isTargeted ? Color.accentColor : dropZoneTint.opacity(0.25), lineWidth: isTargeted ? 2 : 0.8))
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("drop.\(basket.rawValue)")
     }
 
     private var dropZoneTint: Color {
