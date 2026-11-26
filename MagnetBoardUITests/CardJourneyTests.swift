@@ -2,6 +2,30 @@ import XCTest
 
 final class CardJourneyTests: XCTestCase {
     @MainActor
+    func testTapToScheduleRepeatableCard() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-welcome.hasSeenMagnetBoardIntro", "YES", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        app.tabBars.buttons["Plan"].tap()
+        let scroll = app.scrollViews["plan.scroll"]
+        let elements = app.descendants(matching: .any)
+        let card = elements.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@",
+                                                 "tray.card.", "Saturday market,")).firstMatch
+        let afternoon = elements["drop.afternoon"]
+        reveal([card, afternoon], in: scroll)
+        let id = String(card.identifier.dropFirst("tray.card.".count))
+        card.tap()
+        afternoon.tap()
+        let placed = elements.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@",
+                                                   "planned.card.\(id)", "Afternoon")).firstMatch
+        reveal([placed], in: scroll)
+        XCTAssertTrue(placed.label.contains("Saturday market"))
+        reveal([card], in: scroll)
+        XCTAssertTrue(card.exists, "A repeatable market stop disappeared from the tray")
+    }
+
+    @MainActor
     func testWelcomeAndCancelNewCard() {
         continueAfterFailure = false
         let app = XCUIApplication()

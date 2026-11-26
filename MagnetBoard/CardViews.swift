@@ -68,7 +68,7 @@ struct MagnetCardView: View {
         case .board:
             return "Tap to edit. Touch and hold, then drag to move this sticky note."
         case .compact:
-            return "Drag into a day part to plan it."
+            return "Hold and drag into a day part, or tap to select and then tap a basket."
         case .dragPreview:
             return "Dragging card."
         }

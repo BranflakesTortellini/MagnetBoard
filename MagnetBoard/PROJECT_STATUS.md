@@ -139,7 +139,7 @@ The next review fixed rough cards crossing locked rows at tied times, multi-entr
 
 From Windows, once the workflow is on the default branch, open **Actions > iOS Build > Run workflow**. It also runs on pull requests and on pushes to main. The job only starts for a public repository on github.com. Private, internal, or unknown visibility skips the whole job before allocating a Mac. It uses a standard hosted runner without paid larger runners, uploaded artifacts, or caches.
 
-The iPhone tests cover two journeys: create, move, schedule and relaunch; and first-run help, blank-title validation and canceling a draft. Check the launch-and-test step for two passing tests; skipped or undiscovered tests are not a pass. The separate planner regression checks run the production models on macOS. Neither suite exercises live Maps requests or Calendar permissions.
+The iPhone tests cover three journeys: create, drag, schedule and relaunch; select a repeatable card and tap an afternoon basket; and first-run help, blank-title validation and canceling a draft. All three must pass; skipped or undiscovered tests are not a pass. The separate planner regression checks run the production models on macOS. Neither suite exercises live Maps requests or Calendar permissions.
 
 ## Next user acceptance checks
 

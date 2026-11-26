@@ -1,5 +1,4 @@
 import Foundation
-import CoreTransferable
 import OSLog
 import UniformTypeIdentifiers
 #if canImport(UIKit)
@@ -24,6 +23,12 @@ func splitCSV(_ text: String) -> [String] {
 }
 
 enum PlannerDragPayload {
+    static func trace(_ stage: String) {
+        #if DEBUG
+        Logger(subsystem: "chrysalis.MagnetBoard", category: "TrayDrop").notice("\(stage, privacy: .public)")
+        #endif
+    }
+
     static let idea = UTType(exportedAs: "chrysalis.magnetboard.idea-id", conformingTo: .data)
     static let placement = UTType(exportedAs: "chrysalis.magnetboard.placement-id", conformingTo: .data)
 
@@ -46,22 +51,6 @@ enum PlannerDragPayload {
             Task { @MainActor in receive(id) }
         }
         return true
-    }
-}
-
-/// Transfer just the source identifier. The receiving board still checks that
-/// it owns the card and that scheduling another placement is allowed.
-struct TrayCardTransfer: Codable, Transferable {
-    let ideaID: UUID
-
-    static func trace(_ stage: String) {
-        #if DEBUG
-        Logger(subsystem: "chrysalis.MagnetBoard", category: "TrayDrop").notice("\(stage, privacy: .public)")
-        #endif
-    }
-
-    static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: PlannerDragPayload.idea)
     }
 }
 
