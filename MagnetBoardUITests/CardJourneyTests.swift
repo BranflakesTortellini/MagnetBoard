@@ -76,14 +76,22 @@ final class CardJourneyTests: XCTestCase {
         reveal([tray], in: scroll)
         let source = elements["tray.card.\(id)"]
         for _ in 0..<10 {
-            if source.exists && source.isHittable && tray.frame.contains(source.frame.centerPoint) { break }
-            tray.swipeLeft()
+            // XCTest on iOS 18 can fail the test (rather than return false)
+            // when asked for the hit point of an offscreen horizontal item.
+            if source.exists, !source.frame.isEmpty,
+               tray.frame.insetBy(dx: 8, dy: 0).contains(source.frame.centerPoint) { break }
+            tray.swipeLeft(velocity: .slow)
         }
         let morning = elements["drop.morning"]
         reveal([source, morning], in: scroll)
-        XCTAssertTrue(source.isHittable && morning.isHittable, "Tray card and morning basket must both be reachable")
-        let start = source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        let end = morning.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let sourcePoint = source.frame.centerPoint
+        let destination = morning.frame.centerPoint
+        XCTAssertTrue(tray.frame.contains(sourcePoint) && scroll.frame.contains(sourcePoint) &&
+                      scroll.frame.contains(destination), "Both drag endpoints must be on screen")
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: sourcePoint.x - app.frame.minX, dy: sourcePoint.y - app.frame.minY))
+        let end = origin.withOffset(CGVector(dx: destination.x - app.frame.minX, dy: destination.y - app.frame.minY))
+        print("Dragging the new card from \(sourcePoint) to the Morning basket at \(destination)")
         start.press(forDuration: 1.0, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.6)
         let scheduled = elements["planned.card.\(id)"]
         reveal([scheduled], in: scroll)
