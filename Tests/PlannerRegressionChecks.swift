@@ -14,6 +14,8 @@ struct PlannerRegressionChecks {
         checkOvernight(day, file: directory.appendingPathComponent("overnight.json"))
         checkEstimates(day, file: directory.appendingPathComponent("estimates.json"))
         try checkOldSave(day, file: directory.appendingPathComponent("legacy.json"))
+        checkRepeatAndUndo(day, file: directory.appendingPathComponent("undo.json"))
+        try checkDamagedSave(day, file: directory.appendingPathComponent("damaged.json"))
         print("Planner regression checks passed.")
     }
 
@@ -96,5 +98,39 @@ struct PlannerRegressionChecks {
         precondition(saved[0].manualTravel(to: b.id)?.seconds == 600)
         precondition(saved[1].manualTravel(to: last.id)?.seconds == 0)
         precondition(saved[2].manualTravel(to: next.id) == nil, "Old last stop adopted a new destination")
+    }
+
+    static func checkRepeatAndUndo(_ day: Date, file: URL) {
+        let vm = ScheduleViewModel(saveURL: file)
+        let reservation = IdeaItem(title: "Reservation")
+        var breakIdea = IdeaItem(title: "Coffee")
+        breakIdea.allowsMultipleScheduledInstances = true
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: day)!
+        guard case .scheduled(let dinner) = vm.scheduleIdea(reservation, startDate: day),
+              case .duplicateNotAllowed(let original) = vm.scheduleIdea(reservation, startDate: tomorrow),
+              case .scheduled(let first) = vm.scheduleIdea(breakIdea, startDate: day.addingTimeInterval(3600)),
+              case .scheduled(let second) = vm.scheduleIdea(breakIdea, startDate: tomorrow) else {
+            preconditionFailure("One-off and repeatable cards must have different duplicate rules")
+        }
+        precondition(original.id == dinner.id && first.id != second.id)
+        let removed = vm.deleteEvents(on: day)
+        precondition(vm.events == [second], "Clearing today changed tomorrow")
+        vm.restoreEvents(removed)
+        vm.restoreEvents(removed)
+        let reopened = ScheduleViewModel(saveURL: file)
+        precondition(reopened.events(on: day) == [dinner, first] && reopened.events(on: tomorrow) == [second],
+                     "Restoring a cleared day lost, duplicated, or changed a placement")
+        print("One-off vs repeatable, clear-day scope, restore and relaunch: passed")
+    }
+
+    static func checkDamagedSave(_ day: Date, file: URL) throws {
+        let original = Data("[unfinished".utf8)
+        try original.write(to: file)
+        let vm = ScheduleViewModel(saveURL: file)
+        precondition(vm.storageIssue != nil, "Unreadable schedule was presented as a clean plan")
+        vm.restoreEvent(card("Session only", day))
+        let after = try Data(contentsOf: file)
+        precondition(after == original, "Editing the session overwrote a damaged file")
+        print("Unreadable schedule preserved byte-for-byte: passed")
     }
 }

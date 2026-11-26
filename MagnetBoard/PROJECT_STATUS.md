@@ -139,7 +139,19 @@ The next review fixed rough cards crossing locked rows at tied times, multi-entr
 
 From Windows, once the workflow is on the default branch, open **Actions > iOS Build > Run workflow**. It also runs on pull requests and on pushes to main. The job only starts for a public repository on github.com. Private, internal, or unknown visibility skips the whole job before allocating a Mac. It uses a standard hosted runner without paid larger runners, uploaded artifacts, or caches.
 
-The iPhone test launches the app, creates a uniquely named card, drags it into Must do, and drags the same card from the Plan tray into Morning. It verifies the placement again after relaunch. Check the launch-and-test step for a passing test count of one; skipped or undiscovered tests are not a pass. The separate planner regression checks run the production models on macOS. Neither suite exercises live Maps requests or Calendar permissions.
+The iPhone tests cover two journeys: create, move, schedule and relaunch; and first-run help, blank-title validation and canceling a draft. Check the launch-and-test step for two passing tests; skipped or undiscovered tests are not a pass. The separate planner regression checks run the production models on macOS. Neither suite exercises live Maps requests or Calendar permissions.
+
+## Next user acceptance checks
+
+| Priority | Try it as a planner | What must hold |
+| --- | --- | --- |
+| 1 | Scroll past an overlapping card, lift it, change your mind, and try again on a small iPhone. | Scrolling and canceling never move a card; the intended card moves exactly once on a completed drag. |
+| 2 | Delete a single placement, then clear a whole day and use the visible Undo button each time. | The original order, time buckets and travel notes return; tomorrow's plan is untouched. |
+| 3 | Schedule one reservation twice, then schedule two coffee breaks from a repeatable card. | No duplicate reservation; both coffee breaks remain individually editable. |
+| 4 | Lock an appointment, use Make it flow around it, then edit an overnight event. | No locked time moves; adjacent days show the right conflicts and free slots. |
+| 5 | Decline Calendar permission, allow it later, export, edit and export again. | The in-app plan always survives and the second export updates the original calendar event. |
+| 6 | Change dates while Maps is loading, then go offline and enter a manual estimate. | No stale route appears; the estimate stays with its two stops after reordering and relaunch. |
+| 7 | Repeat adding and scheduling with large text, Reduce Motion and VoiceOver on a real phone. | Buttons and destinations remain reachable and understandable without relying on precise dragging. |
 
 Still needs a real Apple toolchain:
 - Open `MagnetBoard.xcodeproj`.

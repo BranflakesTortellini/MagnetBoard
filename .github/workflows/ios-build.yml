@@ -45,11 +45,11 @@ jobs:
             -destination "platform=iOS Simulator,id=$IPHONE_UDID" \
             -parallel-testing-enabled NO \
             -resultBundlePath "$RUNNER_TEMP/CardJourney.xcresult" \
-            -only-testing:MagnetBoardUITests/CardJourneyTests/testAddDragAndScheduleCard \
+            -only-testing:MagnetBoardUITests/CardJourneyTests \
             test
           # A successful build or an empty/skipped suite is not a passing UI test.
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/CardJourney.xcresult" > "$RUNNER_TEMP/ui-summary.json"
-          python3 -c 'import json, sys; s=json.load(open(sys.argv[1])); print(s); sys.exit(0 if s["passedTests"] == 1 and s["failedTests"] == 0 else 1)' "$RUNNER_TEMP/ui-summary.json"
+          python3 -c 'import json, sys; s=json.load(open(sys.argv[1])); print(s); sys.exit(0 if s["passedTests"] == 2 and s["failedTests"] == 0 else 1)' "$RUNNER_TEMP/ui-summary.json"
 
       - name: Verify bundled Calendar and drag declarations
         run: |

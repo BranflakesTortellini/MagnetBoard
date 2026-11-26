@@ -2,6 +2,34 @@ import XCTest
 
 final class CardJourneyTests: XCTestCase {
     @MainActor
+    func testWelcomeAndCancelNewCard() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-welcome.hasSeenMagnetBoardIntro", "NO", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        let help = app.navigationBars["How it works"]
+        XCTAssertTrue(help.waitForExistence(timeout: 15), "A first-time user did not get the introduction")
+        help.buttons["Done"].tap()
+        let add = app.buttons["board.newIdea"]
+        XCTAssertTrue(add.waitForExistence(timeout: 8))
+        add.tap()
+        let save = app.buttons["newIdea.save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5))
+        XCTAssertFalse(save.isEnabled, "The app accepted an untitled card")
+        let field = app.textFields["newIdea.title"]
+        for _ in 0..<5 where !field.isHittable { app.swipeUp(velocity: .slow) }
+        field.tap()
+        let title = "Discard \(UUID().uuidString.prefix(8))"
+        field.typeText(title)
+        XCTAssertTrue(save.isEnabled)
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(add.waitForExistence(timeout: 8))
+        let discarded = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "board.card.", title)).firstMatch
+        XCTAssertFalse(discarded.exists, "Cancel added the draft to the board")
+    }
+
+    @MainActor
     func testAddDragAndScheduleCard() {
         continueAfterFailure = false
         let app = XCUIApplication()
