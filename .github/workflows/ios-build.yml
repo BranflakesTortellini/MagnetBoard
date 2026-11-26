@@ -1,0 +1,70 @@
+name: iOS Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test MagnetBoard on iPhone (public repos only)
+    # Fail closed before allocating a runner, including for unknown visibility.
+    if: github.server_url == 'https://github.com' && github.event.repository.visibility == 'public'
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: List project schemes
+        run: xcodebuild -project MagnetBoard.xcodeproj -list
+
+      - name: Select an installed iPhone simulator
+        run: |
+          set -eo pipefail
+          iphone=$(xcrun simctl list devices available --json | python3 .github/scripts/select_iphone.py "$(xcrun --sdk iphonesimulator --show-sdk-version)")
+          echo "IPHONE_UDID=$iphone" >> "$GITHUB_ENV"
+
+      - name: Launch the app and test adding, dragging, and scheduling
+        run: |
+          set -eo pipefail
+          xcodebuild \
+            -project MagnetBoard.xcodeproj \
+            -scheme MagnetBoard \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/magnetboard-derived-data" \
+            -destination "platform=iOS Simulator,id=$IPHONE_UDID" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/CardJourney.xcresult" \
+            -only-testing:MagnetBoardUITests/CardJourneyTests/testAddDragAndScheduleCard \
+            test
+          # A successful build or an empty/skipped suite is not a passing UI test.
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/CardJourney.xcresult" > "$RUNNER_TEMP/ui-summary.json"
+          python3 -c 'import json, sys; s=json.load(open(sys.argv[1])); print(s); sys.exit(0 if s["passedTests"] == 1 and s["failedTests"] == 0 else 1)' "$RUNNER_TEMP/ui-summary.json"
+
+      - name: Verify bundled Calendar and drag declarations
+        run: |
+          info="$RUNNER_TEMP/magnetboard-derived-data/Build/Products/Debug-iphonesimulator/MagnetBoard.app/Info.plist"
+          plutil -lint "$info"
+          /usr/libexec/PlistBuddy -c 'Print :NSCalendarsWriteOnlyAccessUsageDescription' "$info"
+          /usr/libexec/PlistBuddy -c 'Print :NSCalendarsFullAccessUsageDescription' "$info"
+          /usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations' "$info"
+
+      - name: Run planner regression checks
+        if: ${{ !cancelled() }}
+        run: |
+          xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+            -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+            -target "$(uname -m)-apple-macosx14.0" \
+            MagnetBoard/Models.swift MagnetBoard/BoardViewModel.swift MagnetBoard/ScheduleViewModel.swift \
+            Tests/PlannerRegressionChecks.swift -o "$RUNNER_TEMP/planner-checks"
+          "$RUNNER_TEMP/planner-checks"

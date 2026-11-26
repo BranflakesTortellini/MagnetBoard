@@ -17,7 +17,7 @@ struct SchedulePlannerView: View {
     @State private var routePolylines: [MKPolyline] = []
     @State private var exportMessage: String?
     @State private var showClearBurst = false
-    @State private var draggedScheduledEventID: UUID?
+    @State private var travelRefreshID = UUID()
     @AppStorage("sequence.avoidBackToBackFullMeals") private var avoidBackToBackFullMeals = true
     @AppStorage("sequence.avoidBackToBackHighEnergy") private var avoidBackToBackHighEnergy = true
     @AppStorage("sequence.allowBarCrawl") private var allowBarCrawl = true
@@ -58,7 +58,6 @@ struct SchedulePlannerView: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
-            .onChange(of: selectedTravelMode) { _ in computeTravel() }
 
             PlanQuickHelp()
 
@@ -87,14 +86,16 @@ struct SchedulePlannerView: View {
                 }
                 .padding()
             }
+            .accessibilityIdentifier("plan.scroll")
         }
-        .onAppear { computeTravel() }
-        .onChange(of: selectedDate) { _ in computeTravel() }
+        .task(id: travelInputs) { [inputs = travelInputs] in
+            await computeTravel(for: inputs)
+        }
         .overlay {
             ClearBurstView(isVisible: showClearBurst)
                 .allowsHitTesting(false)
         }
-        .alert("Calendar", isPresented: Binding(
+        .alert("Plan", isPresented: Binding(
             get: { exportMessage != nil },
             set: { if !$0 { exportMessage = nil } }
         )) {
@@ -115,14 +116,16 @@ struct SchedulePlannerView: View {
             ScrollView(.horizontal) {
                 HStack(spacing: 12) {
                     ForEach(boardViewModel.ideas.filter { idea in
-                        idea.commitment != .locked &&
-                        (idea.allowsMultipleScheduledInstances || !scheduleViewModel.hasScheduledInstance(for: idea.id))
+                        idea.allowsMultipleScheduledInstances ||
+                        (idea.commitment != .locked && !scheduleViewModel.hasScheduledInstance(for: idea.id))
                     }) { idea in
                         MagnetCardView(idea: idea, mode: .compact)
+                            .accessibilityIdentifier("tray.card.\(idea.id.uuidString)")
                     }
                 }
                 .padding(.vertical, 4)
             }
+            .accessibilityIdentifier("plan.tray")
         }
     }
 
@@ -144,7 +147,7 @@ struct SchedulePlannerView: View {
                 .font(.headline)
         }
         .padding()
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.secondarySystemGroupedBackground)))
+        .background(RoundedRectangle(cornerRadius: 14).fill(SystemPalette.secondaryGroupedBackground))
     }
 
     @ViewBuilder private var warningsView: some View {
@@ -159,7 +162,7 @@ struct SchedulePlannerView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Label("Things to check", systemImage: "exclamationmark.triangle")
                     .font(.headline)
-                ForEach(warnings, id: \.self) { warning in
+                ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
                     Text("• \(warning)")
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -223,7 +226,7 @@ struct SchedulePlannerView: View {
                     .controlSize(.large)
                 }
 
-                Text("Tip: drag planned rows up or down. Locked rows stay put.")
+                Text("Drag rough cards within the same time bucket. Locked and exact-time cards stay put.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -242,64 +245,47 @@ struct SchedulePlannerView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(24)
-                .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemGroupedBackground)))
+                .background(RoundedRectangle(cornerRadius: 16).fill(SystemPalette.secondaryGroupedBackground))
             } else {
-                ForEach(events) { event in
+                ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
                     ScheduledEventRow(
                         event: event,
+                        nextEvent: events.indices.contains(index + 1) ? events[index + 1] : nil,
                         travelMode: selectedTravelMode,
                         travelLegStatus: travelLegStatuses[event.id],
                         onExport: { export(event) },
-                        onManualTravelEstimate: { minutes, note in
-                            scheduleViewModel.setManualTravelEstimate(after: event, minutes: minutes, note: note)
-                            computeTravel()
+                        onManualTravelEstimate: { nextID, minutes, note in
+                            if !scheduleViewModel.setManualTravelEstimate(after: event, to: nextID, minutes: minutes, note: note) {
+                                exportMessage = "The next stop changed. Open the estimate for the current route."
+                            }
                         },
                         onClearManualTravelEstimate: {
                             scheduleViewModel.clearManualTravelEstimate(after: event)
-                            computeTravel()
                         },
                         onSetExactTime: { newStart in
                             scheduleViewModel.setExactTime(event, startDate: newStart)
-                            computeTravel()
                         },
                         onSetRoughPlacement: { precision, dayPart, mustDo in
                             scheduleViewModel.setRoughPlacement(event, precision: precision, dayPart: dayPart)
                             if let mustDo { scheduleViewModel.setMustDo(event, mustDo) }
                             Haptics.lightImpact()
-                            computeTravel()
                         },
                         onMoveEarlier: {
                             scheduleViewModel.moveEventWithinDay(event, on: selectedDate, direction: -1)
                             Haptics.lightImpact()
-                            computeTravel()
                         },
                         onMoveLater: {
                             scheduleViewModel.moveEventWithinDay(event, on: selectedDate, direction: 1)
                             Haptics.lightImpact()
-                            computeTravel()
                         },
-                        onLockToggle: { scheduleViewModel.toggleLocked(event) },
+                        onLockToggle: {
+                            scheduleViewModel.toggleLocked(event)
+                            refreshBoardCommitments(for: [event])
+                        },
                         onMustDoToggle: { scheduleViewModel.toggleMustDo(event) },
                         onDelete: { deleteScheduledEvent(event) }
                     )
-                    .opacity(draggedScheduledEventID == event.id ? 0.55 : 1.0)
-                    .onDrag {
-                        draggedScheduledEventID = event.id
-                        Haptics.lightImpact()
-                        return NSItemProvider(object: event.id.uuidString as NSString)
-                    } preview: {
-                        ScheduledDragPreview(title: event.title, subtitle: event.schedulePrecision.label)
-                    }
-                    .onDrop(of: [UTType.plainText], delegate: ScheduledEventDropDelegate(
-                        targetEvent: event,
-                        selectedDate: selectedDate,
-                        draggedEventID: $draggedScheduledEventID,
-                        scheduleViewModel: scheduleViewModel,
-                        onReordered: {
-                            Haptics.lightImpact()
-                            computeTravel()
-                        }
-                    ))
+                    .modifier(ScheduledRowDrag(event: event, selectedDate: selectedDate))
                     .transition(.scale(scale: 0.88).combined(with: .opacity))
                 }
                 .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82), value: events)
@@ -317,7 +303,7 @@ struct SchedulePlannerView: View {
 
         let notes = scheduleViewModel.smartArrangeRoughEvents(on: selectedDate, settings: sequenceRuleSettings)
         Haptics.success()
-        computeTravel()
+        travelRefreshID = UUID()
 
         if notes.isEmpty {
             exportMessage = "I checked the flow and travel. Nothing obvious needed changing."
@@ -346,9 +332,7 @@ struct SchedulePlannerView: View {
         withAnimation(.spring(response: 0.25, dampingFraction: 0.78)) {
             scheduleViewModel.deleteEvent(event)
         }
-        if !scheduleViewModel.hasScheduledInstance(for: event.ideaID) {
-            boardViewModel.markUnscheduled(event.ideaID)
-        }
+        refreshBoardCommitments(for: [event])
         Haptics.lightImpact()
         undoViewModel.register(
             title: "Removed from plan",
@@ -356,10 +340,8 @@ struct SchedulePlannerView: View {
             systemImage: "sparkles"
         ) {
             scheduleViewModel.restoreEvent(removedEvent)
-            boardViewModel.markScheduled(removedEvent.ideaID, locked: removedEvent.isLocked)
-            computeTravel()
+            refreshBoardCommitments(for: [removedEvent])
         }
-        computeTravel()
     }
 
     private func clearThisDay() {
@@ -371,7 +353,7 @@ struct SchedulePlannerView: View {
         withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
             _ = scheduleViewModel.deleteEvents(on: selectedDate)
         }
-        refreshBoardCommitmentsAfterRemoving(removed)
+        refreshBoardCommitments(for: removed)
         showClearAnimation()
         Haptics.warning()
         undoViewModel.register(
@@ -380,12 +362,8 @@ struct SchedulePlannerView: View {
             systemImage: "flame"
         ) {
             scheduleViewModel.restoreEvents(removed)
-            for event in removed {
-                boardViewModel.markScheduled(event.ideaID, locked: event.isLocked)
-            }
-            computeTravel()
+            refreshBoardCommitments(for: removed)
         }
-        computeTravel()
     }
 
     private func clearAllScheduledCards() {
@@ -397,7 +375,7 @@ struct SchedulePlannerView: View {
         withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
             _ = scheduleViewModel.deleteAllEvents()
         }
-        refreshBoardCommitmentsAfterRemoving(removed)
+        refreshBoardCommitments(for: removed)
         showClearAnimation()
         Haptics.warning()
         undoViewModel.register(
@@ -406,18 +384,18 @@ struct SchedulePlannerView: View {
             systemImage: "flame"
         ) {
             scheduleViewModel.restoreEvents(removed)
-            for event in removed {
-                boardViewModel.markScheduled(event.ideaID, locked: event.isLocked)
-            }
-            computeTravel()
+            refreshBoardCommitments(for: removed)
         }
-        computeTravel()
     }
 
-    private func refreshBoardCommitmentsAfterRemoving(_ removed: [EventItem]) {
-        let affectedIdeaIDs = Set(removed.map(\.ideaID))
-        for ideaID in affectedIdeaIDs where !scheduleViewModel.hasScheduledInstance(for: ideaID) {
-            boardViewModel.markUnscheduled(ideaID)
+    private func refreshBoardCommitments(for changedEvents: [EventItem]) {
+        for ideaID in Set(changedEvents.map(\.ideaID)) {
+            let placements = scheduleViewModel.events.filter { $0.ideaID == ideaID }
+            if placements.isEmpty {
+                boardViewModel.markUnscheduled(ideaID)
+            } else {
+                boardViewModel.markScheduled(ideaID, locked: placements.contains(where: \.isLocked))
+            }
         }
     }
 
@@ -465,86 +443,71 @@ struct SchedulePlannerView: View {
         }
     }
 
-    private func computeTravel() {
+    private struct TravelInputs: Equatable {
+        let events: [EventItem]
+        let mode: TravelMode
+        let homeStart: CodableCoordinate?
+        let homeEnd: CodableCoordinate?
+        let refreshID: UUID
+    }
+
+    private var travelInputs: TravelInputs {
+        let home = CodableCoordinate(latitude: homeBaseLatitude, longitude: homeBaseLongitude)
+        return TravelInputs(
+            events: scheduleViewModel.events(on: selectedDate),
+            mode: selectedTravelMode,
+            homeStart: hasHomeBase && includeHomeStartLeg ? home : nil,
+            homeEnd: hasHomeBase && includeHomeEndLeg ? home : nil,
+            refreshID: travelRefreshID
+        )
+    }
+
+    private func computeTravel(for inputs: TravelInputs) async {
+        guard !Task.isCancelled else { return }
         travelLegStatuses = [:]
         homeStartTravelStatus = nil
         homeEndTravelStatus = nil
         routePolylines = []
-        let events = scheduleViewModel.events(on: selectedDate)
-        guard !events.isEmpty else { return }
+        guard let first = inputs.events.first, let last = inputs.events.last else { return }
 
-        computeHomeBaseTravel(for: events)
-
-        guard events.count > 1 else { return }
-
-        for idx in 0..<(events.count - 1) {
-            let from = events[idx]
-            let to = events[idx + 1]
-            travelLegStatuses[from.id] = .calculating
-
-            scheduleViewModel.calculateTravelLegStatus(from: from, to: to, travelMode: selectedTravelMode, departureDate: from.endDate) { status in
-                Task { @MainActor in travelLegStatuses[from.id] = status }
-            }
-
-            // Manual estimates are a deliberate opt-out from the Maps ETA path for this leg.
-            // Do not draw a route for a leg where the user has chosen to supply their own estimate.
-            guard from.manualTravelToNextSeconds == nil else { continue }
-
-            scheduleViewModel.calculateRoute(from: from, to: to, travelMode: selectedTravelMode, departureDate: from.endDate) { route in
-                guard let route else { return }
-                Task { @MainActor in routePolylines.append(route.polyline) }
-            }
-        }
-    }
-
-
-    private func computeHomeBaseTravel(for events: [EventItem]) {
-        guard hasHomeBase else { return }
-        let homeCoordinate = CLLocationCoordinate2D(latitude: homeBaseLatitude, longitude: homeBaseLongitude)
-        guard let first = events.first, let last = events.last else { return }
-
-        if includeHomeStartLeg {
+        // An in-flight Maps request can return after SwiftUI cancels this task.
+        // Check cancellation before applying results to the current day.
+        if let home = inputs.homeStart {
             homeStartTravelStatus = .calculating
-            scheduleViewModel.calculateTravelLegStatus(
-                fromCoordinate: homeCoordinate,
-                toCoordinate: first.coordinate?.clLocationCoordinate2D,
-                travelMode: selectedTravelMode,
-                departureDate: first.startDate
-            ) { status in
-                Task { @MainActor in homeStartTravelStatus = status }
-            }
-
-            scheduleViewModel.calculateRoute(
-                fromCoordinate: homeCoordinate,
-                toCoordinate: first.coordinate?.clLocationCoordinate2D,
-                travelMode: selectedTravelMode,
-                departureDate: first.startDate
-            ) { route in
-                guard let route else { return }
-                Task { @MainActor in routePolylines.append(route.polyline) }
-            }
+            let (status, polyline) = await scheduleViewModel.travelEstimate(
+                from: home.clLocationCoordinate2D, to: first.coordinate?.clLocationCoordinate2D,
+                mode: inputs.mode, departureDate: first.startDate
+            )
+            guard !Task.isCancelled else { return }
+            homeStartTravelStatus = status
+            if let polyline { routePolylines.append(polyline) }
         }
 
-        if includeHomeEndLeg {
-            homeEndTravelStatus = .calculating
-            scheduleViewModel.calculateTravelLegStatus(
-                fromCoordinate: last.coordinate?.clLocationCoordinate2D,
-                toCoordinate: homeCoordinate,
-                travelMode: selectedTravelMode,
-                departureDate: last.endDate
-            ) { status in
-                Task { @MainActor in homeEndTravelStatus = status }
+        for (from, to) in zip(inputs.events, inputs.events.dropFirst()) {
+            if let manual = from.manualTravel(to: to.id) {
+                // Manual estimates override Maps and have no route geometry.
+                travelLegStatuses[from.id] = manual
+                continue
             }
+            travelLegStatuses[from.id] = .calculating
+            let (status, polyline) = await scheduleViewModel.travelEstimate(
+                from: from.coordinate?.clLocationCoordinate2D, to: to.coordinate?.clLocationCoordinate2D,
+                mode: inputs.mode, departureDate: from.endDate
+            )
+            guard !Task.isCancelled else { return }
+            travelLegStatuses[from.id] = status
+            if let polyline { routePolylines.append(polyline) }
+        }
 
-            scheduleViewModel.calculateRoute(
-                fromCoordinate: last.coordinate?.clLocationCoordinate2D,
-                toCoordinate: homeCoordinate,
-                travelMode: selectedTravelMode,
-                departureDate: last.endDate
-            ) { route in
-                guard let route else { return }
-                Task { @MainActor in routePolylines.append(route.polyline) }
-            }
+        if let home = inputs.homeEnd {
+            homeEndTravelStatus = .calculating
+            let (status, polyline) = await scheduleViewModel.travelEstimate(
+                from: last.coordinate?.clLocationCoordinate2D, to: home.clLocationCoordinate2D,
+                mode: inputs.mode, departureDate: last.endDate
+            )
+            guard !Task.isCancelled else { return }
+            homeEndTravelStatus = status
+            if let polyline { routePolylines.append(polyline) }
         }
     }
 }
@@ -566,7 +529,7 @@ struct PlanQuickHelp: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color(.systemGroupedBackground))
+        .background(SystemPalette.groupedBackground)
     }
 }
 
@@ -588,10 +551,9 @@ struct DaySummaryCard: View {
         events.reduce(0) { $0 + max(0, $1.endDate.timeIntervalSince($1.startDate)) }
     }
 
-    private var knownTravelSeconds: TimeInterval {
-        let internalSeconds = travelLegStatuses.values.compactMap(\.seconds).reduce(0, +)
-        let homeSeconds = [homeStartTravelStatus, homeEndTravelStatus].compactMap { $0?.seconds }.reduce(0, +)
-        return internalSeconds + homeSeconds
+    private var knownTravelSeconds: TimeInterval? {
+        let internalLegs = events.dropLast().map { travelLegStatuses[$0.id] }
+        return TravelLegStatus.knownTotal(internalLegs + [homeStartTravelStatus, homeEndTravelStatus])
     }
 
     private var roughCount: Int { events.filter { $0.schedulePrecision != .exactTime }.count }
@@ -601,7 +563,7 @@ struct DaySummaryCard: View {
     private var planMoodLabel: String {
         if events.isEmpty { return "Blank canvas" }
         if missingLocationCount > 0 { return "Needs details" }
-        if events.count >= 6 || (activitySeconds + knownTravelSeconds) >= 8 * 60 * 60 { return "Packed" }
+        if events.count >= 6 || (activitySeconds + (knownTravelSeconds ?? 0)) >= 8 * 60 * 60 { return "Packed" }
         if roughCount > 0 { return "Flexible" }
         return "Looks tidy"
     }
@@ -609,7 +571,7 @@ struct DaySummaryCard: View {
     private var planMoodIcon: String {
         if events.isEmpty { return "sparkles" }
         if missingLocationCount > 0 { return "mappin.slash" }
-        if events.count >= 6 || (activitySeconds + knownTravelSeconds) >= 8 * 60 * 60 { return "figure.run" }
+        if events.count >= 6 || (activitySeconds + (knownTravelSeconds ?? 0)) >= 8 * 60 * 60 { return "figure.run" }
         if roughCount > 0 { return "leaf" }
         return "checkmark.seal"
     }
@@ -617,7 +579,7 @@ struct DaySummaryCard: View {
     private var planMoodHelp: String {
         if events.isEmpty { return "Drag in a card to start shaping the day." }
         if missingLocationCount > 0 { return "Some cards need a place before travel can be trusted." }
-        if events.count >= 6 || (activitySeconds + knownTravelSeconds) >= 8 * 60 * 60 { return "This may be a full day. Consider breaks or backup options." }
+        if events.count >= 6 || (activitySeconds + (knownTravelSeconds ?? 0)) >= 8 * 60 * 60 { return "This may be a full day. Consider breaks or backup options." }
         if roughCount > 0 { return "Nice: some parts are still movable." }
         return "Everything is placed clearly."
     }
@@ -643,15 +605,8 @@ struct DaySummaryCard: View {
     }
 
     private var backHomeIsLate: Bool {
-        guard useDayBounds, let backHomeDate else { return false }
-        return hourValue(for: backHomeDate) > preferredDayEndHour
-    }
-
-    private func hourValue(for date: Date) -> Double {
-        let calendar = Calendar.current
-        let hour = calendar.component(.hour, from: date)
-        let minute = calendar.component(.minute, from: date)
-        return Double(hour) + Double(minute) / 60.0
+        guard useDayBounds, let backHomeDate, let last = events.last else { return false }
+        return planningHour(backHomeDate, relativeTo: last.startDate) > preferredDayEndHour
     }
 
     var body: some View {
@@ -681,7 +636,7 @@ struct DaySummaryCard: View {
                     SummaryPill(title: "Stops", value: "\(events.count)", systemImage: "rectangle.stack")
                     SummaryPill(title: "Must-do", value: "\(mustDoCount)", systemImage: "star")
                     SummaryPill(title: "Activity", value: formatDuration(activitySeconds), systemImage: "clock")
-                    SummaryPill(title: "Known travel", value: knownTravelSeconds > 0 ? formatDuration(knownTravelSeconds) : "unknown", systemImage: "arrow.triangle.swap")
+                    SummaryPill(title: "Known travel", value: knownTravelSeconds.map(formatDuration) ?? "unknown", systemImage: "arrow.triangle.swap")
                     SummaryPill(title: "Rough cards", value: "\(roughCount)", systemImage: "hand.draw")
                 }
 
@@ -733,7 +688,7 @@ struct DaySummaryCard: View {
             RoundedRectangle(cornerRadius: 20)
                 .fill(
                     LinearGradient(
-                        colors: [CutePalette.boardSky.opacity(0.38), Color(.secondarySystemGroupedBackground)],
+                        colors: [CutePalette.boardSky.opacity(0.38), SystemPalette.secondaryGroupedBackground],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -777,7 +732,7 @@ struct SummaryPill: View {
             Spacer(minLength: 0)
         }
         .padding(8)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.tertiarySystemGroupedBackground).opacity(0.88)))
+        .background(RoundedRectangle(cornerRadius: 14).fill(SystemPalette.tertiaryGroupedBackground.opacity(0.88)))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.accentColor.opacity(0.10), lineWidth: 0.6))
     }
 }
@@ -815,9 +770,11 @@ struct ScheduleDropZone: View {
                 .fill(isTargeted ? Color.accentColor.opacity(0.18) : dropZoneWash)
         )
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(isTargeted ? Color.accentColor : dropZoneTint.opacity(0.25), lineWidth: isTargeted ? 2 : 0.8))
-        .onDrop(of: [UTType.plainText], isTargeted: $isTargeted) { providers in
+        .onDrop(of: [PlannerDragPayload.idea], isTargeted: $isTargeted) { providers in
             handleDrop(providers)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("drop.\(dayPart?.rawValue ?? (forceMustDo ? "mustDo" : "dayOnly"))")
         .alert("Could not schedule card", isPresented: Binding(
             get: { dropNotice != nil },
             set: { if !$0 { dropNotice = nil } }
@@ -852,52 +809,42 @@ struct ScheduleDropZone: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        for provider in providers {
-            provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { item, _ in
-                let idString: String?
-                if let data = item as? Data {
-                    idString = String(data: data, encoding: .utf8)
-                } else if let string = item as? String {
-                    idString = string
-                } else {
-                    idString = nil
-                }
-                guard let idString, let uuid = UUID(uuidString: idString) else { return }
-                Task { @MainActor in
-                    guard let idea = boardViewModel.ideas.first(where: { $0.id == uuid }) else { return }
-                    let start = scheduleViewModel.firstOpenSlot(
-                        on: selectedDate,
-                        preferredHour: hour,
-                        duration: idea.duration ?? 60 * 60
-                    )
-                    let result = scheduleViewModel.scheduleIdea(
-                        idea,
-                        startDate: start,
-                        schedulePrecision: targetPrecision,
-                        dayPart: dayPart
-                    )
-                    switch result {
-                    case .scheduled(let event):
-                        if forceMustDo { scheduleViewModel.toggleMustDo(event) }
-                        Haptics.success()
-                        boardViewModel.markScheduled(idea.id)
-                    case .duplicateNotAllowed(let existing):
-                        Haptics.warning()
-                        dropNotice = "\(idea.title) is already in the plan at \(existing.startDate.formatted(date: .abbreviated, time: .shortened)). Turn on ‘Can use this more than once’ in the card details if that is intentional."
-                    }
-                }
+        PlannerDragPayload.loadID(from: providers, type: PlannerDragPayload.idea) { uuid in
+            guard let idea = boardViewModel.ideas.first(where: { $0.id == uuid }),
+                  idea.commitment != .locked || idea.allowsMultipleScheduledInstances else { return }
+            let start = scheduleViewModel.firstOpenSlot(
+                on: selectedDate,
+                preferredHour: hour,
+                duration: idea.duration ?? 60 * 60
+            )
+            let result = scheduleViewModel.scheduleIdea(
+                idea,
+                startDate: start,
+                schedulePrecision: targetPrecision,
+                dayPart: dayPart
+            )
+            switch result {
+            case .scheduled(let event):
+                if forceMustDo, !event.isMustDo { scheduleViewModel.setMustDo(event, true) }
+                Haptics.success()
+                let hasLockedPlacement = scheduleViewModel.events.contains { $0.ideaID == idea.id && $0.isLocked }
+                boardViewModel.markScheduled(idea.id, locked: hasLockedPlacement)
+            case .duplicateNotAllowed(let existing):
+                Haptics.warning()
+                let day = existing.startDate.formatted(date: .abbreviated, time: .omitted)
+                dropNotice = "\(idea.title) is already in the plan for \(day). Turn on ‘Can use this more than once’ in the card details if that is intentional."
             }
         }
-        return true
     }
 }
 
 struct ScheduledEventRow: View {
     let event: EventItem
+    let nextEvent: EventItem?
     let travelMode: TravelMode
     let travelLegStatus: TravelLegStatus?
     let onExport: () -> Void
-    let onManualTravelEstimate: (_ minutes: Double, _ note: String?) -> Void
+    let onManualTravelEstimate: (_ nextID: UUID, _ minutes: Double, _ note: String?) -> Void
     let onClearManualTravelEstimate: () -> Void
     let onSetExactTime: (_ startDate: Date) -> Void
     let onSetRoughPlacement: (_ precision: SchedulePrecision, _ dayPart: DayPart?, _ mustDo: Bool?) -> Void
@@ -907,7 +854,7 @@ struct ScheduledEventRow: View {
     let onMustDoToggle: () -> Void
     let onDelete: () -> Void
 
-    @State private var showingManualTravelSheet = false
+    @State private var editingTravelDestination: EventItem?
     @State private var showingExactTimeSheet = false
 
     private var mustDoTimingText: String {
@@ -957,13 +904,17 @@ struct ScheduledEventRow: View {
                     Button("Export to Apple Calendar") { onExport() }
                     Divider()
                     Button("Move earlier") { onMoveEarlier() }
-                        .disabled(event.isLocked)
+                        .disabled(event.isLocked || event.schedulePrecision == .exactTime)
                     Button("Move later") { onMoveLater() }
-                        .disabled(event.isLocked)
+                        .disabled(event.isLocked || event.schedulePrecision == .exactTime)
                     Divider()
-                    Button("Set manual travel to next…") { showingManualTravelSheet = true }
+                    if let nextEvent {
+                        Button("Set travel to \(nextEvent.title)…") { editingTravelDestination = nextEvent }
+                    }
                     if event.manualTravelToNextSeconds != nil {
-                        Button("Clear manual travel estimate") { onClearManualTravelEstimate() }
+                        Button(event.manualTravel(to: nextEvent?.id) == nil ? "Clear saved estimate for previous route" : "Clear manual travel estimate") {
+                            onClearManualTravelEstimate()
+                        }
                     }
                     Divider()
                     Button("Delete from plan", role: .destructive) { onDelete() }
@@ -998,7 +949,7 @@ struct ScheduledEventRow: View {
             RoundedRectangle(cornerRadius: 20)
                 .fill(
                     LinearGradient(
-                        colors: [event.category.cuteWash, Color(.secondarySystemGroupedBackground)],
+                        colors: [event.category.cuteWash, SystemPalette.secondaryGroupedBackground],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -1007,21 +958,25 @@ struct ScheduledEventRow: View {
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(event.category.cuteTint.opacity(0.24), lineWidth: 0.8))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Planned card, \(event.title), \(schedulePlacementLabel)")
-        .accessibilityHint(event.isLocked ? "Locked. Use the actions menu for options." : "Drag to reorder, or use the actions menu for options.")
+        .accessibilityIdentifier("planned.card.\(event.ideaID.uuidString)")
+        .accessibilityHint(event.isLocked || event.schedulePrecision == .exactTime
+                           ? "Use the actions menu for options."
+                           : "Drag to reorder within this time bucket, or use the actions menu.")
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) { onDelete() } label: {
                 Label("Delete", systemImage: "trash")
             }
         }
-        .sheet(isPresented: $showingManualTravelSheet) {
+        .sheet(item: $editingTravelDestination) { destination in
+            let estimate = event.manualTravel(to: destination.id)
             ManualTravelEstimateSheet(
-                initialMinutes: event.manualTravelToNextSeconds.map { $0 / 60 } ?? 20,
-                initialNote: event.manualTravelToNextNote ?? "",
+                initialMinutes: (estimate?.seconds).map { $0 / 60 } ?? 20,
+                initialNote: estimate == nil ? "" : (event.manualTravelToNextNote ?? ""),
                 onSave: { minutes, note in
-                    onManualTravelEstimate(minutes, note)
-                    showingManualTravelSheet = false
+                    onManualTravelEstimate(destination.id, minutes, note)
+                    editingTravelDestination = nil
                 },
-                onCancel: { showingManualTravelSheet = false }
+                onCancel: { editingTravelDestination = nil }
             )
         }
         .sheet(isPresented: $showingExactTimeSheet) {
@@ -1138,6 +1093,13 @@ struct ManualTravelEstimateSheet: View {
     let onSave: (_ minutes: Double, _ note: String?) -> Void
     let onCancel: () -> Void
 
+    private var validMinutes: Double? {
+        guard let minutes = Double(minutesText), minutes.isFinite, minutes >= 0, minutes * 60 < Double(Int.max) else {
+            return nil
+        }
+        return minutes
+    }
+
     init(initialMinutes: Double,
          initialNote: String,
          onSave: @escaping (_ minutes: Double, _ note: String?) -> Void,
@@ -1169,10 +1131,10 @@ struct ManualTravelEstimateSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        guard let minutes = Double(minutesText), minutes >= 0 else { return }
+                        guard let minutes = validMinutes else { return }
                         onSave(minutes, note)
                     }
-                    .disabled(Double(minutesText) == nil)
+                    .disabled(validMinutes == nil)
                 }
             }
         }
@@ -1199,34 +1161,35 @@ struct ScheduledDragPreview: View {
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemBackground)))
+        .background(RoundedRectangle(cornerRadius: 16).fill(SystemPalette.systemBackground))
         .shadow(radius: 12, y: 8)
     }
 }
 
-struct ScheduledEventDropDelegate: DropDelegate {
-    let targetEvent: EventItem
+struct ScheduledRowDrag: ViewModifier {
+    @EnvironmentObject var scheduleViewModel: ScheduleViewModel
+    let event: EventItem
     let selectedDate: Date
-    @Binding var draggedEventID: UUID?
-    let scheduleViewModel: ScheduleViewModel
-    let onReordered: () -> Void
+    @State private var isTargeted = false
 
-    func dropEntered(info: DropInfo) {
-        guard let draggedEventID,
-              draggedEventID != targetEvent.id else { return }
-        scheduleViewModel.reorderEvent(draggedEventID, before: targetEvent.id, on: selectedDate)
-        onReordered()
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        draggedEventID = nil
-        Haptics.success()
-        return true
-    }
-
-    func dropExited(info: DropInfo) {}
-
-    func validateDrop(info: DropInfo) -> Bool {
-        true
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if event.isLocked || event.schedulePrecision == .exactTime {
+            content
+        } else {
+            content
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(isTargeted ? Color.accentColor : .clear, lineWidth: 2))
+                .onDrag {
+                    Haptics.lightImpact()
+                    return PlannerDragPayload.provider(for: event.id, type: PlannerDragPayload.placement)
+                } preview: {
+                    ScheduledDragPreview(title: event.title, subtitle: event.schedulePrecision.label)
+                }
+                .onDrop(of: [PlannerDragPayload.placement], isTargeted: $isTargeted) { providers in
+                    PlannerDragPayload.loadID(from: providers, type: PlannerDragPayload.placement) { id in
+                        scheduleViewModel.moveEvent(id, onto: event.id, on: selectedDate)
+                    }
+                }
+        }
     }
 }

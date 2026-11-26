@@ -1,4 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 // MARK: - Cute visual design helpers
 
@@ -14,6 +19,50 @@ enum CutePalette {
 
     static let noteShadow = Color.black.opacity(0.16)
     static let liftedShadow = Color.black.opacity(0.28)
+}
+
+/// Platform-backed system colors kept in one place. This avoids ambiguous
+/// `Color(.system...)` expressions in views and keeps the iOS path explicit.
+enum SystemPalette {
+    static var systemBackground: Color {
+        #if canImport(UIKit)
+        return Color(UIColor.systemBackground)
+        #elseif canImport(AppKit)
+        return Color(NSColor.windowBackgroundColor)
+        #else
+        return Color.white
+        #endif
+    }
+
+    static var groupedBackground: Color {
+        #if canImport(UIKit)
+        return Color(UIColor.systemGroupedBackground)
+        #elseif canImport(AppKit)
+        return Color(NSColor.controlBackgroundColor)
+        #else
+        return Color.gray.opacity(0.08)
+        #endif
+    }
+
+    static var secondaryGroupedBackground: Color {
+        #if canImport(UIKit)
+        return Color(UIColor.secondarySystemGroupedBackground)
+        #elseif canImport(AppKit)
+        return Color(NSColor.textBackgroundColor)
+        #else
+        return Color.gray.opacity(0.12)
+        #endif
+    }
+
+    static var tertiaryGroupedBackground: Color {
+        #if canImport(UIKit)
+        return Color(UIColor.tertiarySystemGroupedBackground)
+        #elseif canImport(AppKit)
+        return Color(NSColor.underPageBackgroundColor)
+        #else
+        return Color.gray.opacity(0.16)
+        #endif
+    }
 }
 
 extension ActivityCategory {

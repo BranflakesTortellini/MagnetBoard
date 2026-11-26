@@ -3,6 +3,7 @@ import MapKit
 
 /// Search/pick UI used by both the new-card form and card-detail editor.
 /// Users are not forced to choose an exact place; this simply makes Maps ETA easy.
+@MainActor
 struct LocationSearchSheet: View {
     @StateObject private var viewModel: LocationSearchViewModel
 
@@ -73,6 +74,7 @@ struct LocationSearchSheet: View {
                 }
             }
             .navigationTitle("Find Location")
+            .onDisappear { viewModel.cancelSearch() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { onCancel() }

@@ -2,6 +2,15 @@ import Foundation
 import CoreLocation
 import MapKit
 
+/// Day-end preferences can extend past midnight (e.g. 26 means 2 AM tomorrow).
+/// Compare local clock readings, not elapsed seconds across a daylight-saving change.
+func planningHour(_ date: Date, relativeTo day: Date, calendar: Calendar = .current) -> Double {
+    let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: day),
+                                      to: calendar.startOfDay(for: date)).day ?? 0
+    let clock = calendar.dateComponents([.hour, .minute], from: date)
+    return Double(days * 24 + (clock.hour ?? 0)) + Double(clock.minute ?? 0) / 60
+}
+
 /// Codable wrapper because CLLocationCoordinate2D does not synthesize Codable cleanly.
 public struct CodableCoordinate: Codable, Hashable {
     public var latitude: Double
@@ -97,6 +106,11 @@ public enum TravelLegStatus: Codable, Equatable {
         default:
             return nil
         }
+    }
+
+    static func knownTotal(_ statuses: [TravelLegStatus?]) -> TimeInterval? {
+        let estimates = statuses.compactMap { $0?.seconds }
+        return estimates.isEmpty ? nil : estimates.reduce(0, +)
     }
 
     public var label: String {
@@ -434,6 +448,14 @@ public enum SchedulingResult: Equatable {
     case duplicateNotAllowed(existing: EventItem)
 }
 
+// Older files recorded the duration on the departing card without naming the
+// destination. A legacy estimate on the last card can be kept without ever
+// applying it to an unrelated stop added later.
+enum ManualTravelTarget: Codable, Hashable {
+    case placement(UUID)
+    case unassigned
+}
+
 /// Represents a concrete scheduled placement derived from an idea card.
 /// Calendar export is optional and happens only when the user asks for it.
 public struct EventItem: Identifiable, Codable, Hashable {
@@ -465,6 +487,14 @@ public struct EventItem: Identifiable, Codable, Hashable {
     /// the preceding event because the leg starts after this event ends.
     public var manualTravelToNextSeconds: TimeInterval? = nil
     public var manualTravelToNextNote: String? = nil
+    var manualTravelTarget: ManualTravelTarget?
+
+    func manualTravel(to nextID: UUID?) -> TravelLegStatus? {
+        guard let nextID, manualTravelTarget == .placement(nextID),
+              let seconds = manualTravelToNextSeconds, seconds.isFinite,
+              seconds >= 0, seconds < Double(Int.max) else { return nil }
+        return .manualEstimate(seconds: seconds, note: manualTravelToNextNote)
+    }
 
     public init(id: UUID = UUID(),
                 ideaID: UUID,
@@ -505,6 +535,7 @@ public struct EventItem: Identifiable, Codable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case id, ideaID, title, startDate, endDate, isLocked, coordinate, locationName
         case notes, eventKitID, invitees, category, isMustDo, schedulePrecision, dayPart, manualTravelToNextSeconds, manualTravelToNextNote
+        case manualTravelTarget
     }
 
     /// Custom decoding preserves compatibility with JSON saved before categories
@@ -528,5 +559,6 @@ public struct EventItem: Identifiable, Codable, Hashable {
         dayPart = try container.decodeIfPresent(DayPart.self, forKey: .dayPart)
         manualTravelToNextSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .manualTravelToNextSeconds)
         manualTravelToNextNote = try container.decodeIfPresent(String.self, forKey: .manualTravelToNextNote)
+        manualTravelTarget = try container.decodeIfPresent(ManualTravelTarget.self, forKey: .manualTravelTarget)
     }
 }

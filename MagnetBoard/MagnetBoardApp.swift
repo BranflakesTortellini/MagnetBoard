@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Entry point for the Magnet Board Planner app.
 @main
+@MainActor
 struct MagnetBoardApp: App {
     @StateObject private var boardViewModel = BoardViewModel()
     @StateObject private var scheduleViewModel = ScheduleViewModel()

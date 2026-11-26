@@ -46,21 +46,30 @@ public struct ContentView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            UndoBannerView()
-                .environmentObject(undoViewModel)
+            VStack(spacing: 0) {
+                ForEach([boardViewModel.storageIssue, scheduleViewModel.storageIssue].compactMap { $0 }, id: \.self) { issue in
+                    Label(issue, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(.regularMaterial)
+                }
+                UndoBannerView()
+                    .environmentObject(undoViewModel)
+            }
         }
     }
 
     @ToolbarContentBuilder
     private var helpToolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
+        ToolbarItem(placement: .navigationBarLeading) {
             Button {
                 showingHelp = true
             } label: {
                 Label("Help", systemImage: "questionmark.circle")
             }
         }
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItem(placement: .navigationBarTrailing) {
             Button {
                 showingSettings = true
             } label: {

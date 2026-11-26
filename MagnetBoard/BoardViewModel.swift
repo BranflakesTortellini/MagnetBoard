@@ -1,5 +1,6 @@
 import Foundation
 import CoreLocation
+import Combine
 
 /// View model for managing loose and detailed cards on the free magnet board.
 @MainActor
@@ -7,15 +8,16 @@ public final class BoardViewModel: ObservableObject {
     @Published public var ideas: [IdeaItem] = [] {
         didSet { save() }
     }
+    @Published private(set) var storageIssue: String?
 
-    private let saveURL: URL
+    private let saveURL: URL?
     private var isLoading = false
+    private var canSave = true
 
     public init() {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        self.saveURL = documents.appendingPathComponent("magnet_board_ideas.json")
-        load()
-        seedIfNeeded()
+        saveURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("magnet_board_ideas.json")
+        if load() { seedIfNeeded() }
     }
 
     public func addIdea(title: String,
@@ -71,8 +73,19 @@ public final class BoardViewModel: ObservableObject {
 
     public func updatePosition(for ideaID: UUID, x: Double, y: Double) {
         guard let index = ideas.firstIndex(where: { $0.id == ideaID }) else { return }
-        ideas[index].boardX = max(70, min(900, x))
-        ideas[index].boardY = max(70, min(1400, y))
+        var idea = ideas[index]
+        idea.boardX = max(70, min(900, x))
+        idea.boardY = max(70, min(1400, y))
+        ideas[index] = idea
+    }
+
+    func moveIdea(_ ideaID: UUID, x: Double, y: Double, group: BoardGroup) {
+        guard let index = ideas.firstIndex(where: { $0.id == ideaID }) else { return }
+        var idea = ideas[index]
+        idea.boardX = x
+        idea.boardY = y
+        applyGroup(group, to: &idea)
+        ideas[index] = idea
     }
 
     /// Updates the visual group when the user drops a card into a board zone.
@@ -80,29 +93,39 @@ public final class BoardViewModel: ObservableObject {
     /// not scheduling commitments.
     public func updateGroup(for ideaID: UUID, group: BoardGroup) {
         guard let index = ideas.firstIndex(where: { $0.id == ideaID }) else { return }
-        ideas[index].group = group
+        var idea = ideas[index]
+        applyGroup(group, to: &idea)
+        ideas[index] = idea
+    }
+
+    private func applyGroup(_ group: BoardGroup, to idea: inout IdeaItem) {
+        idea.group = group
 
         // A card moved into “Needs info” should remain loose unless it was already
         // scheduled/locked. Moving around the board should not silently unschedule it.
         if group == .needsInfo,
-           ideas[index].commitment != .scheduled,
-           ideas[index].commitment != .locked {
-            ideas[index].commitment = .loose
+           idea.commitment != .scheduled,
+           idea.commitment != .locked {
+            idea.commitment = .loose
         }
     }
 
     public func markScheduled(_ ideaID: UUID, locked: Bool = false) {
         guard let index = ideas.firstIndex(where: { $0.id == ideaID }) else { return }
-        ideas[index].commitment = locked ? .locked : .scheduled
-        ideas[index].group = .scheduledSoon
+        var idea = ideas[index]
+        idea.commitment = locked ? .locked : .scheduled
+        idea.group = .scheduledSoon
+        if idea != ideas[index] { ideas[index] = idea }
     }
 
     public func markUnscheduled(_ ideaID: UUID) {
         guard let index = ideas.firstIndex(where: { $0.id == ideaID }) else { return }
-        if ideas[index].commitment == .scheduled {
-            ideas[index].commitment = ideas[index].missingInfoHints.isEmpty ? .detailed : .loose
-            ideas[index].group = inferredGroup(for: ideas[index])
-        }
+        var idea = ideas[index]
+        guard idea.commitment == .scheduled || idea.commitment == .locked else { return }
+        idea.commitment = idea.missingInfoHints.isEmpty ? .detailed : .loose
+        if idea.group == .scheduledSoon { idea.group = .ideas }
+        idea.group = inferredGroup(for: idea)
+        ideas[index] = idea
     }
 
     public func duplicate(_ idea: IdeaItem) {
@@ -209,16 +232,18 @@ public final class BoardViewModel: ObservableObject {
         ]
         var rowCounters: [BoardGroup: Int] = [:]
 
-        for index in ideas.indices {
-            let inferredGroup = inferredGroup(for: ideas[index])
-            ideas[index].group = inferredGroup
+        var tidiedIdeas = ideas
+        for index in tidiedIdeas.indices {
+            let inferredGroup = inferredGroup(for: tidiedIdeas[index])
+            tidiedIdeas[index].group = inferredGroup
             rowCounters[inferredGroup, default: 0] += 1
             let row = rowCounters[inferredGroup, default: 1]
             let x = columns.first(where: { $0.0 == inferredGroup })?.1 ?? 350
             let yBase = inferredGroup == .scheduledSoon ? 760.0 : 150.0
-            ideas[index].boardX = x
-            ideas[index].boardY = yBase + Double(row - 1) * 118.0
+            tidiedIdeas[index].boardX = x
+            tidiedIdeas[index].boardY = yBase + Double(row - 1) * 118.0
         }
+        ideas = tidiedIdeas
     }
 
     private func inferredGroup(for idea: IdeaItem) -> BoardGroup {
@@ -229,24 +254,37 @@ public final class BoardViewModel: ObservableObject {
         return idea.group
     }
 
-    private func load() {
+    /// Returns true only for a new board. A damaged save or a deliberately empty
+    /// board must never be overwritten by the starter cards on launch.
+    private func load() -> Bool {
+        guard let saveURL else {
+            canSave = false
+            storageIssue = "The board storage folder is unavailable."
+            return false
+        }
         isLoading = true
         defer { isLoading = false }
-        guard FileManager.default.fileExists(atPath: saveURL.path) else { return }
         do {
             let data = try Data(contentsOf: saveURL)
             ideas = try JSONDecoder().decode([IdeaItem].self, from: data)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return true
         } catch {
+            canSave = false
+            storageIssue = "The saved board could not be opened. The original file was kept. Board changes will not be saved."
             print("Failed to load board ideas: \(error)")
         }
+        return false
     }
 
     private func save() {
-        guard !isLoading else { return }
+        guard !isLoading, canSave, let saveURL else { return }
         do {
             let data = try JSONEncoder.prettyDateEncoder.encode(ideas)
             try data.write(to: saveURL, options: [.atomic])
+            if storageIssue != nil { storageIssue = nil }
         } catch {
+            storageIssue = "The board could not be saved. Changes are only available for this session."
             print("Failed to save board ideas: \(error)")
         }
     }

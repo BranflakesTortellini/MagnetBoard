@@ -61,6 +61,7 @@ The app should feel like moving little magnets or sticky notes, not like filling
 ## Honest limitations
 
 - This code has not been compiled in Xcode in this environment. SwiftUI/MapKit/EventKit must still be checked on a Mac/iPhone.
+- The active Xcode project points at the `MagnetBoard/` folder. The older `MagnetBoardApp/` folder is a source checkpoint copy and is not the current Xcode target.
 - Home-base travel works from stored coordinates, and Settings now has soft day start/end preferences, but there is not yet a dedicated “leave home at exactly X” workflow.
 - Make it flow is still conservative. It is not full route optimization and does not call MapKit for every permutation.
 - Drag-to-reorder and drag-on-board feel need real device testing.
@@ -121,3 +122,26 @@ Completed in this checkpoint:
 - Added `PRE_TEST_BACKLOG.md` for likely post-device-test refinements.
 
 Honest note: this step intentionally avoided deeper feature risk. The app is now at a good point for a first device/simulator test once the Apple build environment is available.
+
+## Xcode compile-readiness pass
+
+Completed locally:
+- Patched the actual Xcode target sources under `MagnetBoard/`, not the older `MagnetBoardApp/` checkpoint folder.
+- Added explicit Combine imports for the view models and kept Combine's default publisher for `@Published` state.
+- Replaced ambiguous `Color(.system...)` usage with centralized `SystemPalette` helpers.
+- Changed toolbar placements from `.topBar...` to `.navigationBar...` for broader iOS compatibility.
+- Constrained the Xcode target to iPhone/iPad platforms and set the iOS deployment target to 17.0.
+- Connected the Calendar usage strings and drag payload declarations through the target's Info.plist.
+
+A follow-up runtime audit protected unreadable saves, corrected drag reordering and must-do placement, and guarded stale Maps results. On first export, Calendar requests write-only access. Updating an existing export requests full access when needed to look up the saved event.
+
+The next review fixed rough cards crossing locked rows at tied times, multi-entry tag and people editing, and overnight occupancy and return-home timing. Manual travel estimates now follow a specific pair of stops. Older saves associate estimates with the next stop in the originally saved day; an estimate from a former last stop is not applied to a newly added destination. A known zero-minute trip stays distinct from an unknown trip.
+
+From Windows, once the workflow is on the default branch, open **Actions > iOS Build > Run workflow**. It also runs on pull requests and on pushes to main. The job only starts for a public repository on github.com. Private, internal, or unknown visibility skips the whole job before allocating a Mac. It uses a standard hosted runner without paid larger runners, uploaded artifacts, or caches.
+
+The iPhone test launches the app, creates a uniquely named card, drags it into Must do, and drags the same card from the Plan tray into Morning. It verifies the placement again after relaunch. Check the launch-and-test step for a passing test count of one; skipped or undiscovered tests are not a pass. The separate planner regression checks run the production models on macOS. Neither suite exercises live Maps requests or Calendar permissions.
+
+Still needs a real Apple toolchain:
+- Open `MagnetBoard.xcodeproj`.
+- Select an iPhone simulator first, not macOS or visionOS.
+- Build once, then fix any remaining SDK-specific errors one at a time.

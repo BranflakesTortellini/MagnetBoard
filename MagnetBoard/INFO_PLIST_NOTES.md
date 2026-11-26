@@ -1,24 +1,14 @@
 # Info.plist and Xcode Capability Notes
 
-This source bundle does not include a complete Xcode project file. When creating the real iOS app target, add the appropriate privacy strings and capabilities.
+The iOS target merges `Config/MagnetBoard-Info.plist` into its generated Info.plist in Debug and Release.
 
 ## Calendar / EventKit
 
 The app exports exact-time planned items to Apple Calendar using EventKit.
 
-Recommended privacy key for iOS 17+ write-only event access:
+The first export requests write-only access. Updating an earlier export requires full access because EventKit must look up the saved event identifier. If the user declines the upgrade, the app leaves the earlier export alone.
 
-```xml
-<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
-<string>Magnet Board uses Calendar access only when you choose to export an exact plan item to Apple Calendar.</string>
-```
-
-For older OS targets or fallback EventKit access, also consider:
-
-```xml
-<key>NSCalendarsUsageDescription</key>
-<string>Magnet Board uses Calendar access only when you choose to export an exact plan item to Apple Calendar.</string>
-```
+The supplied plist declares both `NSCalendarsWriteOnlyAccessUsageDescription` and `NSCalendarsFullAccessUsageDescription`.
 
 ## Location / MapKit
 

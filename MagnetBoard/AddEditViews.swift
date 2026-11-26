@@ -26,6 +26,12 @@ struct AddIdeaView: View {
     @State private var group: BoardGroup = .ideas
     @State private var priority = 2
 
+    private var enteredCost: Double? {
+        guard let amount = Double(cost.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")), amount.isFinite else { return nil }
+        return amount
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -52,6 +58,7 @@ struct AddIdeaView: View {
 
                 Section("Card basics") {
                     TextField("Title, e.g. Saturday market", text: $title)
+                        .accessibilityIdentifier("newIdea.title")
                     Picker("How real is this?", selection: $commitment) {
                         Text(CardCommitment.loose.label).tag(CardCommitment.loose)
                         Text(CardCommitment.detailed.label).tag(CardCommitment.detailed)
@@ -64,7 +71,13 @@ struct AddIdeaView: View {
                             Text(group.title).tag(group)
                         }
                     }
-                    Picker("Category", selection: $category) {
+                    Picker("Category", selection: Binding(
+                        get: { category },
+                        set: { newCategory in
+                            category = newCategory
+                            allowsMultipleScheduledInstances = newCategory.isRepeatFriendlyByDefault
+                        }
+                    )) {
                         ForEach(ActivityCategory.allCases) { category in
                             Label(category.label, systemImage: category.systemImage).tag(category)
                         }
@@ -95,7 +108,17 @@ struct AddIdeaView: View {
                     }
 
                     HStack {
-                        TextField("Location or neighborhood", text: $locationName)
+                        TextField("Location or neighborhood", text: Binding(
+                            get: { locationName },
+                            set: { name in
+                                locationName = name
+                                if selectedCoordinate != nil {
+                                    selectedCoordinate = nil
+                                    latitude = ""
+                                    longitude = ""
+                                }
+                            }
+                        ))
                         Button("Search") { showingLocationSearch = true }
                     }
                     if selectedCoordinate != nil {
@@ -109,9 +132,15 @@ struct AddIdeaView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack {
-                            TextField("Latitude", text: $latitude)
+                            TextField("Latitude", text: Binding(
+                                get: { latitude },
+                                set: { latitude = $0; selectedCoordinate = nil }
+                            ))
                                 .keyboardType(.numbersAndPunctuation)
-                            TextField("Longitude", text: $longitude)
+                            TextField("Longitude", text: Binding(
+                                get: { longitude },
+                                set: { longitude = $0; selectedCoordinate = nil }
+                            ))
                                 .keyboardType(.numbersAndPunctuation)
                         }
                     }
@@ -139,16 +168,15 @@ struct AddIdeaView: View {
                     showingLocationSearch = false
                 }
             }
-            .onChange(of: category) { newCategory in
-                allowsMultipleScheduledInstances = newCategory.isRepeatFriendlyByDefault
-            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { isPresented = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") { addCard() }
-                        .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("newIdea.save")
+                        .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                  (includeCost && enteredCost == nil))
                 }
             }
         }
@@ -168,7 +196,7 @@ struct AddIdeaView: View {
         self.durationMinutes = durationMinutes
         self.group = group
         self.priority = priority
-        if !tags.isEmpty { self.tags = tags }
+        self.tags = tags
         Haptics.lightImpact()
     }
 
@@ -177,7 +205,8 @@ struct AddIdeaView: View {
         if let selectedCoordinate {
             coordinate = selectedCoordinate
         } else if let lat = Double(latitude), let lon = Double(longitude) {
-            coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            let candidate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            coordinate = CLLocationCoordinate2DIsValid(candidate) ? candidate : nil
         } else {
             coordinate = nil
         }
@@ -186,7 +215,7 @@ struct AddIdeaView: View {
         boardViewModel.addIdea(
             title: title,
             duration: includeDuration ? durationMinutes * 60 : nil,
-            cost: includeCost ? Double(cost.replacingOccurrences(of: ",", with: ".")) : nil,
+            cost: includeCost ? enteredCost : nil,
             locationName: locationName,
             coordinate: coordinate,
             notes: notes,
@@ -233,8 +262,26 @@ struct IdeaDetailView: View {
     @EnvironmentObject var scheduleViewModel: ScheduleViewModel
     @EnvironmentObject var undoViewModel: DelightUndoViewModel
     @Environment(\.dismiss) private var dismiss
-    @State var idea: IdeaItem
+    @State private var idea: IdeaItem
+    @State private var tagsText: String
+    @State private var peopleText: String
     @State private var showingLocationSearch = false
+
+    init(idea: IdeaItem) {
+        _idea = State(initialValue: idea)
+        _tagsText = State(initialValue: idea.tags.joined(separator: ", "))
+        _peopleText = State(initialValue: idea.people.joined(separator: ", "))
+    }
+
+    // Keep the user's delimiters while typing. Normalizing the field on every
+    // keystroke removes the trailing comma before a second entry can be typed.
+    private var editedIdea: IdeaItem {
+        var draft = idea
+        draft.title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.tags = splitCSV(tagsText)
+        draft.people = splitCSV(peopleText)
+        return draft
+    }
 
     var body: some View {
         NavigationStack {
@@ -270,13 +317,20 @@ struct IdeaDetailView: View {
                     OptionalDurationEditor(duration: $idea.duration)
                     OptionalCostEditor(cost: $idea.cost)
                     HStack {
-                        TextField("Location or neighborhood", text: $idea.locationName)
+                        TextField("Location or neighborhood", text: Binding(
+                            get: { idea.locationName },
+                            set: { name in
+                                idea.locationName = name
+                                idea.coordinate = nil
+                            }
+                        ))
                         Button("Search") { showingLocationSearch = true }
                     }
                     if let coordinate = idea.coordinate {
                         Label(String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude), systemImage: "location.fill")
                             .font(.caption)
                             .foregroundStyle(.green)
+                        Button("Remove exact location") { idea.coordinate = nil }
                     } else {
                         Text("No exact coordinate yet. Maps ETA needs coordinates, but manual travel estimates still work.")
                             .font(.caption)
@@ -284,22 +338,17 @@ struct IdeaDetailView: View {
                     }
                     TextField("Notes", text: $idea.notes, axis: .vertical)
                         .lineLimit(3...8)
-                    TextField("Tags", text: Binding(
-                        get: { idea.tags.joined(separator: ", ") },
-                        set: { idea.tags = splitCSV($0) }
-                    ))
-                    TextField("People", text: Binding(
-                        get: { idea.people.joined(separator: ", ") },
-                        set: { idea.people = splitCSV($0) }
-                    ))
+                    TextField("Tags", text: $tagsText)
+                    TextField("People", text: $peopleText)
                 }
 
                 Section("Planning readiness") {
-                    if idea.missingInfoHints.isEmpty {
+                    let missing = editedIdea.missingInfoHints
+                    if missing.isEmpty {
                         Label("Enough information for stronger planning help.", systemImage: "checkmark.circle")
                             .foregroundStyle(.green)
                     } else {
-                        Text("Missing: \(idea.missingInfoHints.joined(separator: ", "))")
+                        Text("Missing: \(missing.joined(separator: ", "))")
                             .foregroundStyle(.orange)
                     }
                 }
@@ -322,16 +371,20 @@ struct IdeaDetailView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        boardViewModel.updateIdea(idea)
+                        boardViewModel.updateIdea(editedIdea)
                         dismiss()
                     }
+                    .disabled(idea.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
     }
 
     private func deleteCardWithUndo() {
-        let removedIdea = idea
+        guard let removedIdea = boardViewModel.ideas.first(where: { $0.id == idea.id }) else {
+            dismiss()
+            return
+        }
         let removedEvents = scheduleViewModel.deleteEvents(forIdeaID: idea.id)
         boardViewModel.removeIdea(idea)
         Haptics.warning()

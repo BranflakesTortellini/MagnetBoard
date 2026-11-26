@@ -7,12 +7,21 @@ struct FreeBoardView: View {
     @EnvironmentObject var boardViewModel: BoardViewModel
     @Binding var showingAddIdea: Bool
     @State private var selectedIdea: IdeaItem?
-    @State private var dragStartPositions: [UUID: CGPoint] = [:]
-    @State private var liftedIdeaID: UUID?
+    @GestureState private var boardDrag: BoardDrag?
     @State private var boardNotice: String?
     @AppStorage(PlanningSettingsKeys.reduceMotion) private var reduceMotion = false
 
-    private let canvasSize = CGSize(width: 960, height: 1500)
+    private struct BoardDrag {
+        let ideaID: UUID
+        let position: CGPoint
+    }
+
+    private var liftedIdeaID: UUID? { boardDrag?.ideaID }
+
+    private var canvasSize: CGSize {
+        let lowestCard = boardViewModel.ideas.map(\.boardY).max() ?? 0
+        return CGSize(width: 960, height: max(1500, lowestCard + 140))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,7 +51,9 @@ struct FreeBoardView: View {
 
                     ForEach(boardViewModel.ideas) { idea in
                         MagnetCardView(idea: idea, mode: .board)
-                            .position(x: idea.boardX, y: idea.boardY)
+                            .accessibilityValue(Text(idea.group.title))
+                            .accessibilityIdentifier("board.card.\(idea.id.uuidString)")
+                            .position(boardPosition(for: idea))
                             .scaleEffect(!reduceMotion && liftedIdeaID == idea.id ? 1.05 : 1.0)
                             .shadow(color: Color.black.opacity(liftedIdeaID == idea.id ? 0.24 : 0.10), radius: liftedIdeaID == idea.id ? 18 : 4, x: 0, y: liftedIdeaID == idea.id ? 14 : 3)
                             .rotationEffect(!reduceMotion && liftedIdeaID == idea.id ? .degrees(-1.2) : .degrees(0))
@@ -55,10 +66,15 @@ struct FreeBoardView: View {
                     }
                 }
                 .frame(width: canvasSize.width, height: canvasSize.height)
+                .coordinateSpace(name: "magnet-board-canvas")
             }
+            .accessibilityIdentifier("board.canvas")
+        }
+        .onChange(of: liftedIdeaID) { _, lifted in
+            if lifted != nil { Haptics.lightImpact() }
         }
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Button {
                     boardViewModel.tidyBoardByPlanningState()
                 } label: {
@@ -89,57 +105,37 @@ struct FreeBoardView: View {
     /// while scrolling the two-axis board.
     private func boardMoveGesture(for idea: IdeaItem) -> some Gesture {
         LongPressGesture(minimumDuration: 0.16)
-            .sequenced(before: DragGesture(minimumDistance: 0))
-            .onChanged { value in
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("magnet-board-canvas")))
+            .updating($boardDrag) { value, state, _ in
                 switch value {
                 case .first(true):
-                    beginMoving(idea)
+                    state = BoardDrag(ideaID: idea.id, position: CGPoint(x: idea.boardX, y: idea.boardY))
                 case .second(true, let drag?):
-                    beginMoving(idea)
-                    move(idea, translation: drag.translation)
+                    state = BoardDrag(ideaID: idea.id, position: clampedPosition(for: idea, translation: drag.translation))
                 default:
                     break
                 }
             }
             .onEnded { value in
-                switch value {
-                case .second(true, let drag?):
-                    finishMoving(idea, translation: drag.translation)
-                default:
-                    dragStartPositions[idea.id] = nil
-                    liftedIdeaID = nil
-                }
+                guard case .second(true, let drag?) = value,
+                      drag.translation != .zero else { return }
+                let position = clampedPosition(for: idea, translation: drag.translation)
+                // Gesture state resets on cancellation. Persist only the completed move.
+                boardViewModel.moveIdea(idea.id, x: position.x, y: position.y, group: groupForBoardPosition(position))
+                Haptics.success()
             }
     }
 
-    private func beginMoving(_ idea: IdeaItem) {
-        if liftedIdeaID != idea.id { Haptics.lightImpact() }
-        liftedIdeaID = idea.id
-        if dragStartPositions[idea.id] == nil {
-            dragStartPositions[idea.id] = CGPoint(x: idea.boardX, y: idea.boardY)
-        }
+    private func boardPosition(for idea: IdeaItem) -> CGPoint {
+        if let boardDrag, boardDrag.ideaID == idea.id { return boardDrag.position }
+        return CGPoint(x: idea.boardX, y: idea.boardY)
     }
 
-    private func move(_ idea: IdeaItem, translation: CGSize) {
-        let start = dragStartPositions[idea.id] ?? CGPoint(x: idea.boardX, y: idea.boardY)
-        boardViewModel.updatePosition(
-            for: idea.id,
-            x: start.x + translation.width,
-            y: start.y + translation.height
+    private func clampedPosition(for idea: IdeaItem, translation: CGSize) -> CGPoint {
+        CGPoint(
+            x: max(70, min(900, CGFloat(idea.boardX) + translation.width)),
+            y: max(70, min(canvasSize.height - 100, CGFloat(idea.boardY) + translation.height))
         )
-    }
-
-    private func finishMoving(_ idea: IdeaItem, translation: CGSize) {
-        let start = dragStartPositions[idea.id] ?? CGPoint(x: idea.boardX, y: idea.boardY)
-        let finalPosition = CGPoint(
-            x: start.x + translation.width,
-            y: start.y + translation.height
-        )
-        boardViewModel.updatePosition(for: idea.id, x: finalPosition.x, y: finalPosition.y)
-        boardViewModel.updateGroup(for: idea.id, group: groupForBoardPosition(finalPosition))
-        Haptics.success()
-        dragStartPositions[idea.id] = nil
-        liftedIdeaID = nil
     }
 
     /// Converts a physical board drop position into a soft board group.
@@ -220,6 +216,7 @@ struct BoardQuickActions: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .accessibilityIdentifier("board.newIdea")
 
             Button {
                 Haptics.success()

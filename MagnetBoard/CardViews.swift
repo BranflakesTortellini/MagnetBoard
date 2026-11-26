@@ -17,15 +17,15 @@ struct MagnetCardView: View {
     }
 
     @ViewBuilder private var visibleCard: some View {
-        if mode == .board {
-            cardBody
-        } else {
+        if mode == .compact {
             cardBody
                 .onDrag {
-                    NSItemProvider(object: idea.id.uuidString as NSString)
+                    PlannerDragPayload.provider(for: idea.id, type: PlannerDragPayload.idea)
                 } preview: {
                     MagnetCardView(idea: idea, mode: .dragPreview)
                 }
+        } else {
+            cardBody
         }
     }
 
@@ -91,7 +91,7 @@ struct MagnetCardView: View {
         RoundedRectangle(cornerRadius: 20)
             .fill(
                 LinearGradient(
-                    colors: [idea.category.cuteWash, Color(.systemBackground)],
+                    colors: [idea.category.cuteWash, SystemPalette.systemBackground],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
