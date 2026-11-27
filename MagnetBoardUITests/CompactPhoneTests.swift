@@ -32,8 +32,14 @@ final class CompactPhoneTests: XCTestCase {
         XCTAssertTrue(keyboard.waitForExistence(timeout: 8))
         XCTAssertLessThanOrEqual(field.frame.maxY, keyboard.frame.minY + 1)
         XCTAssertTrue(app.buttons["planPicker.confirm"].isHittable)
-        let done = keyboard.buttons["Done"]
-        XCTAssertTrue(done.isHittable)
+        // iOS exposes the return key as a Key or a Button with a localized
+        // lowercase label, depending on keyboard layout.
+        let done = keyboard.descendants(matching: .any).matching(NSPredicate(
+            format: "label ==[c] %@ OR identifier ==[c] %@", "done", "done")).firstMatch
+        guard done.exists && done.isHittable else {
+            print(keyboard.debugDescription)
+            return XCTFail("The software keyboard did not expose a tappable Done key")
+        }
         done.tap()
         let undo = app.buttons["Undo"]
         XCTAssertTrue(undo.waitForExistence(timeout: 10))
