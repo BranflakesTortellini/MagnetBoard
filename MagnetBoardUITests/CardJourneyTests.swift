@@ -16,7 +16,6 @@ final class CardJourneyTests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 10))
         let title = "Lakeside \(Int.random(in: 100000...999999))"
         input.tap()
-        app.dismissSystemKeyboardIntro()
         input.enterName(title)
         XCTAssertEqual(input.value as? String, title)
         input.typeText("\n")
@@ -188,7 +187,6 @@ final class CardJourneyTests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 12))
         XCTAssertTrue(field.isHittable, "Could not reach the new-card title")
         field.tap()
-        app.dismissSystemKeyboardIntro()
         field.enterName(title)
         let fullTitle = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", title), object: field)
         XCTAssertEqual(XCTWaiter.wait(for: [fullTitle], timeout: 12), .completed,
@@ -388,16 +386,6 @@ final class CardJourneyTests: XCTestCase {
 
 private extension CGRect {
     var centerPoint: CGPoint { CGPoint(x: midX, y: midY) }
-}
-
-extension XCUIApplication {
-    @MainActor
-    func dismissSystemKeyboardIntro() {
-        // A fresh simulator shows a keyboard preview with real-looking but
-        // untappable keys behind Apple's one-time Slide to Type introduction.
-        let continueButton = otherElements["UIContinuousPathIntroductionView"].buttons["Continue"]
-        if continueButton.waitForExistence(timeout: 3) { continueButton.tap() }
-    }
 }
 
 private extension XCUIElement {

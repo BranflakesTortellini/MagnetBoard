@@ -26,7 +26,10 @@ final class CompactPhoneTests: XCTestCase {
         let field = app.textFields["planPicker.title"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()
-        app.dismissSystemKeyboardIntro()
+        // Unlike injected typing, a physical tap on a key must wait for the
+        // real software keyboard, not the one-time Slide to Type preview.
+        let intro = app.otherElements["UIContinuousPathIntroductionView"].buttons["Continue"]
+        if intro.waitForExistence(timeout: 3) { intro.tap() }
         let title = "Tea \(Int.random(in: 10000...99999))"
         field.typeText(title)
         let keyboard = app.keyboards.firstMatch
