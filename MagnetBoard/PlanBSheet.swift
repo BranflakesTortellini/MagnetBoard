@@ -15,7 +15,12 @@ struct PlanBSheet: View {
                 let hasPin = schedule.backupOrigin(for: stop, board: board.ideas) != nil
                 if hasPin {
                     Section {
-                        Toggle("Rainy-day ideas only", isOn: $rainyOnly).accessibilityIdentifier("backup.rain")
+                        Picker("Show saved ideas", selection: $rainyOnly) {
+                            Text("All nearby").tag(false)
+                            Text("Rainy day").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("backup.scope")
                     }
                     Section {
                         let ideas = schedule.nearbyBackups(for: stop, board: board.ideas, rainyOnly: rainyOnly)

@@ -42,8 +42,15 @@ final class ChangeOfPlansTests: XCTestCase {
             XCTAssertTrue(outdoor.exists && zines.exists)
             XCTAssertLessThan(outdoor.frame.midY, zines.frame.midY, "Closer saved place should come first")
             XCTAssertFalse(app.buttons["backup.choice.\(ids[9])"].exists)
-            app.switches["backup.rain"].tap()
-            XCTAssertFalse(outdoor.exists, "Outdoor stop still offered after asking for rainy-day ideas")
+            let scope = app.segmentedControls["backup.scope"]
+            XCTAssertTrue(scope.buttons["All nearby"].isSelected)
+            let rain = scope.buttons["Rainy day"]
+            rain.tap()
+            let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: rain)
+            let filtered = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: outdoor)
+            XCTAssertEqual(XCTWaiter.wait(for: [selected, filtered], timeout: 8), .completed,
+                           "Rainy day must be selected and remove the outdoor stop")
+            XCTAssertTrue(zines.isHittable, "The saved indoor stop must remain available")
             zines.tap()
         }
 
