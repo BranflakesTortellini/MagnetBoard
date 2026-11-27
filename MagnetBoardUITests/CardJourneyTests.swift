@@ -16,7 +16,9 @@ final class CardJourneyTests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 10))
         let title = "Lakeside \(Int.random(in: 100000...999999))"
         input.tap()
-        input.typeText(title + "\n")
+        input.typeText(title)
+        XCTAssertEqual(input.value as? String, title)
+        input.typeText("\n")
 
         let placed = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label CONTAINS %@ AND label CONTAINS %@",
@@ -28,16 +30,23 @@ final class CardJourneyTests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 10))
         input.tap()
         input.typeText(title)
+        XCTAssertEqual(input.value as? String, title)
         let existing = app.buttons["planPicker.card.\(id)"]
         XCTAssertTrue(existing.waitForExistence(timeout: 8))
         XCTAssertFalse(existing.isEnabled, "One-off placement was offered a second time")
-        XCTAssertFalse(app.buttons["planPicker.create"].exists, "An existing name was offered as a new card")
+        XCTAssertTrue(existing.label.contains(title))
+        XCTAssertFalse(app.buttons["planPicker.confirm"].isEnabled, "An existing one-off card could be added again")
+        input.typeText("\n")
+        XCTAssertTrue(input.exists, "Keyboard submission accepted a duplicate")
         app.buttons["Cancel"].tap()
         app.terminate()
         app.launch()
         app.tabBars.buttons["Plan"].tap()
         reveal([placed], in: scroll)
         XCTAssertTrue(placed.label.contains(title), "Quick-added placement was lost on relaunch")
+        let placements = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "planned.card.", title))
+        XCTAssertEqual(placements.count, 1)
     }
 
     @MainActor

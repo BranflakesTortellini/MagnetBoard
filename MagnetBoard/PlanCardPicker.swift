@@ -19,9 +19,16 @@ struct PlanCardPicker: View {
         ideas.filter { title.isEmpty || $0.title.localizedStandardContains(title) }
     }
     private var exact: [IdeaItem] {
-        matches.filter { $0.title.compare(title, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
+        ideas.filter {
+            $0.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                .compare(title, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
     }
     private var canCreate: Bool { !title.isEmpty && exact.isEmpty }
+    private var exactAvailable: IdeaItem? {
+        let candidates = exact.filter { availableIDs.contains($0.id) }
+        return candidates.count == 1 ? candidates[0] : nil
+    }
 
     var body: some View {
         NavigationStack {
@@ -30,17 +37,8 @@ struct PlanCardPicker: View {
                     TextField("Find or name a card", text: $query)
                         .focused($typing)
                         .submitLabel(.done)
-                        .onSubmit {
-                            if canCreate { create() }
-                            else if exact.count == 1, let card = exact.first { pick(card) }
-                        }
+                        .onSubmit { confirm() }
                         .accessibilityIdentifier("planPicker.title")
-                    if canCreate {
-                        Button { create() } label: {
-                            Label("Create “\(title)”", systemImage: "plus")
-                        }
-                        .accessibilityIdentifier("planPicker.create")
-                    }
                 } header: {
                     Text(date, format: .dateTime.weekday(.wide).month(.abbreviated).day())
                 }
@@ -69,8 +67,17 @@ struct PlanCardPicker: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(canCreate ? "Create" : "Add") { confirm() }
+                        .accessibilityIdentifier("planPicker.confirm")
+                        .disabled(committed || (!canCreate && exactAvailable == nil))
+                }
             }
-            .onAppear { typing = true }
+            .onAppear {
+                query = ""
+                committed = false
+                typing = true
+            }
         }
     }
 
@@ -80,9 +87,13 @@ struct PlanCardPicker: View {
         onPick(idea.id)
     }
 
-    private func create() {
-        guard !committed, canCreate else { return }
-        committed = true
-        onCreate(title)
+    private func confirm() {
+        guard !committed else { return }
+        if let idea = exactAvailable {
+            pick(idea)
+        } else if canCreate {
+            committed = true
+            onCreate(title)
+        }
     }
 }
