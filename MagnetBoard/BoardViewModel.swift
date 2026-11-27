@@ -14,9 +14,13 @@ public final class BoardViewModel: ObservableObject {
     private var isLoading = false
     private var canSave = true
 
-    public init() {
-        saveURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-            .first?.appendingPathComponent("magnet_board_ideas.json")
+    public convenience init() {
+        self.init(saveURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("magnet_board_ideas.json"))
+    }
+
+    init(saveURL: URL?) {
+        self.saveURL = saveURL
         if load() { seedIfNeeded() }
     }
 

@@ -85,7 +85,8 @@ struct UndoBannerView: View {
                         undoViewModel.undo()
                     }
                     .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(minHeight: 44)
                 }
                 .padding(12)
                 .background(.regularMaterial)

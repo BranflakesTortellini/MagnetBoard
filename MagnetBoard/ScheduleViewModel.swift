@@ -136,6 +136,39 @@ public final class ScheduleViewModel: ObservableObject {
         events[index].endDate = newStart.addingTimeInterval(duration)
     }
 
+    /// Move one placement, never the underlying idea or its other occurrences.
+    @discardableResult
+    func rescheduleRough(_ id: UUID, on date: Date, part: DayPart?) -> Bool {
+        guard let index = events.firstIndex(where: { $0.id == id }),
+              !events[index].isLocked, events[index].schedulePrecision != .exactTime else { return false }
+        var event = events[index]
+        let precision: SchedulePrecision = part == nil ? .dayOnly : .dayPart
+        if Calendar.current.isDate(date, inSameDayAs: event.startDate),
+           event.dayPart == part, event.schedulePrecision == precision { return true }
+        let duration = event.endDate.timeIntervalSince(event.startDate)
+        event.startDate = firstOpenSlot(on: date, preferredHour: part?.proxyHour ?? 12,
+                                        duration: duration, excluding: id)
+        event.endDate = event.startDate.addingTimeInterval(duration)
+        event.dayPart = part
+        event.schedulePrecision = precision
+        events[index] = event
+        return true
+    }
+
+    func undoReschedule(from moved: EventItem, to original: EventItem) -> Bool {
+        guard moved.id == original.id, let index = events.firstIndex(where: { $0.id == moved.id }) else { return false }
+        var current = events[index]
+        guard !current.isLocked, current.startDate == moved.startDate, current.endDate == moved.endDate,
+              current.dayPart == moved.dayPart, current.schedulePrecision == moved.schedulePrecision else { return false }
+        // Undo timing only; keep any unrelated edits made since the move.
+        current.startDate = original.startDate
+        current.endDate = original.endDate
+        current.dayPart = original.dayPart
+        current.schedulePrecision = original.schedulePrecision
+        events[index] = current
+        return true
+    }
+
     /// Promotes a rough scheduled placement into a real clock-time event.
     /// This is the moment where a sticky note becomes calendar-like.
     public func setExactTime(_ event: EventItem, startDate: Date) {
@@ -489,7 +522,7 @@ public final class ScheduleViewModel: ObservableObject {
 
     public func firstOpenSlot(on date: Date,
                               preferredHour: Int = 12,
-                              duration: TimeInterval = 60 * 60) -> Date {
+                              duration: TimeInterval = 60 * 60, excluding id: UUID? = nil) -> Date {
         let calendar = Calendar.current
         let preferred = dateAtHour(preferredHour, on: date)
         guard calendar.isDate(preferred, inSameDayAs: date) else { return date }
@@ -501,7 +534,7 @@ public final class ScheduleViewModel: ObservableObject {
         // keeps the day-part buckets from stacking cards directly on top of each other.
         let safeDuration = max(duration, 15 * 60)
         guard let day = calendar.dateInterval(of: .day, for: date) else { return preferred }
-        let dayEvents = eventsOverlapping(day)
+        let dayEvents = eventsOverlapping(day).filter { $0.id != id }
         while candidate < day.end {
             let end = candidate.addingTimeInterval(safeDuration)
             if end <= day.end, !dayEvents.contains(where: { intervalsOverlap(candidate, end, $0.startDate, $0.endDate) }) {

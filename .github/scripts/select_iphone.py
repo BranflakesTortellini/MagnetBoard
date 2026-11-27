@@ -24,6 +24,10 @@ def select_iphone(devices, sdk):
 
 
 if __name__ == "__main__":
-    version, _, name, udid = select_iphone(json.load(sys.stdin)["devices"], sys.argv[1])
+    devices = json.load(sys.stdin)["devices"]
+    version, _, name, udid = select_iphone(devices, sys.argv[1])
+    if "--runtime" in sys.argv[2:]:
+        print(next(runtime for runtime, entries in devices.items() if any(d["udid"] == udid for d in entries)))
+        sys.exit(0)
     print(f"Testing on {name}, iOS {version[0]}.{version[1]} ({udid})", file=sys.stderr)
     print(udid)

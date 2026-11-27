@@ -15,6 +15,7 @@ struct PlannerRegressionChecks {
         checkEstimates(day, file: directory.appendingPathComponent("estimates.json"))
         try checkOldSave(day, file: directory.appendingPathComponent("legacy.json"))
         checkRepeatAndUndo(day, file: directory.appendingPathComponent("undo.json"))
+        checkMoveAcrossDays(day, file: directory.appendingPathComponent("move.json"))
         try checkDamagedSave(day, file: directory.appendingPathComponent("damaged.json"))
         print("Planner regression checks passed.")
     }
@@ -121,6 +122,35 @@ struct PlannerRegressionChecks {
         precondition(reopened.events(on: day) == [dinner, first] && reopened.events(on: tomorrow) == [second],
                      "Restoring a cleared day lost, duplicated, or changed a placement")
         print("One-off vs repeatable, clear-day scope, restore and relaunch: passed")
+    }
+
+    static func checkMoveAcrossDays(_ day: Date, file: URL) {
+        let vm = ScheduleViewModel(saveURL: file)
+        let next = Calendar.current.date(byAdding: .day, value: 1, to: day)!
+        let afternoon = Calendar.current.date(bySettingHour: 13, minute: 0, second: 0, of: next)!
+        var morning = card("Harbour walk", day.addingTimeInterval(9 * 3600), minutes: 45)
+        morning.dayPart = .morning
+        morning.schedulePrecision = .dayPart
+        morning.isMustDo = true
+        let anchor = card("Reservation", afternoon, minutes: 30, exact: true)
+        var repeatVisit = morning
+        repeatVisit.id = UUID()
+        repeatVisit.isLocked = true
+        vm.events = [morning, anchor, repeatVisit]
+        precondition(!vm.rescheduleRough(anchor.id, on: day, part: nil))
+        precondition(!vm.rescheduleRough(repeatVisit.id, on: next, part: .evening))
+        precondition(vm.rescheduleRough(morning.id, on: next, part: .afternoon))
+        let moved = ScheduleViewModel(saveURL: file).events.first { $0.id == morning.id }!
+        precondition(moved.ideaID == morning.ideaID && moved.isMustDo && moved.dayPart == .afternoon)
+        precondition(moved.startDate == anchor.endDate && moved.endDate.timeIntervalSince(moved.startDate) == 45 * 60)
+        precondition(vm.events(on: day) == [repeatVisit] && vm.events(on: next) == [anchor, moved])
+        vm.setMustDo(moved, false)
+        precondition(vm.undoReschedule(from: moved, to: morning))
+        var expected = morning
+        expected.isMustDo = false
+        precondition(vm.events.first { $0.id == morning.id } == expected)
+        precondition(!vm.undoReschedule(from: moved, to: morning))
+        print("Cross-day move, lock, exact time, repeat placement, duration, persistence and undo: passed")
     }
 
     static func checkDamagedSave(_ day: Date, file: URL) throws {

@@ -263,6 +263,89 @@ final class CardJourneyTests: XCTestCase {
                       "Scheduled placement was lost on relaunch")
     }
 
+    @MainActor
+    func testMoveMorningCardToTomorrowAfternoon() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-welcome.hasSeenMagnetBoardIntro", "YES", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        let plan = app.tabBars.buttons["Plan"]
+        plan.tap()
+        let scroll = app.scrollViews["plan.scroll"]
+        let morning = app.buttons["drop.morning"]
+        reveal([morning], in: scroll)
+        morning.tap()
+        let name = "Harbour \(Int.random(in: 100000...999999))"
+        let input = app.textFields["planPicker.title"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10))
+        input.tap()
+        input.typeText(name)
+        app.buttons["planPicker.confirm"].tap()
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                                                   "planned.card.", name)).firstMatch
+        reveal([row], in: scroll)
+        let id = row.identifier
+        XCTAssertTrue(row.label.contains("Morning"))
+        row.tap()
+        XCTAssertTrue(app.navigationBars["Move card"].waitForExistence(timeout: 8))
+        app.buttons["Tomorrow"].tap()
+        app.buttons["move.afternoon"].tap()
+        let moved = app.buttons[id]
+        reveal([moved], in: scroll)
+        XCTAssertTrue(moved.label.contains("Afternoon"))
+        app.terminate()
+        app.launch()
+        plan.tap()
+        XCTAssertTrue(app.buttons["Next day"].waitForExistence(timeout: 8))
+        XCTAssertFalse(moved.exists, "The card was left on its original day")
+        app.buttons["Next day"].tap()
+        reveal([moved], in: scroll)
+        XCTAssertTrue(moved.label.contains(name) && moved.label.contains("Afternoon"))
+    }
+
+    @MainActor
+    func testFindAndEditOneOfThirtyOverlappingCards() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        let target = UUID()
+        let fixture: [[String: Any]] = (1...30).map { index in
+            ["id": (index == 1 ? target : UUID()).uuidString, "title": "Gallery \(index)",
+             "tags": [index == 1 ? "riverfront" : "indoor"], "boardX": 180, "boardY": 200]
+        }
+        app.launchEnvironment["MAGNETBOARD_TEST_BOARD"] = UUID().uuidString
+        app.launchEnvironment["MAGNETBOARD_TEST_IDEAS"] = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+        app.launchArguments = ["-welcome.hasSeenMagnetBoardIntro", "YES", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        let find = app.buttons["board.find"]
+        XCTAssertTrue(find.waitForExistence(timeout: 10))
+        find.tap()
+        let field = app.textFields["board.find.query"]
+        XCTAssertTrue(field.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["board.find.count"].label.contains("30"))
+        field.tap()
+        field.typeText("riverfront")
+        let result = app.buttons["board.result.\(target)"]
+        XCTAssertTrue(result.waitForExistence(timeout: 8))
+        result.tap()
+        let title = app.textFields["cardDetails.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 8))
+        XCTAssertEqual(title.value as? String, "Gallery 1")
+        title.tap()
+        title.typeText(" North")
+        let edited = try XCTUnwrap(title.value as? String)
+        XCTAssertTrue(edited.contains("North"))
+        app.buttons["Save"].tap()
+        app.terminate()
+        app.launchEnvironment.removeValue(forKey: "MAGNETBOARD_TEST_IDEAS")
+        app.launch()
+        find.tap()
+        XCTAssertTrue(app.staticTexts["board.find.count"].label.contains("30"))
+        field.tap()
+        field.typeText("North")
+        XCTAssertTrue(result.waitForExistence(timeout: 8))
+        XCTAssertTrue(result.label.contains(edited))
+    }
+
     /// Move the outer scroll view in small increments, keeping both gesture
     /// endpoints inside the actual viewport (not merely in the accessibility tree).
     @MainActor

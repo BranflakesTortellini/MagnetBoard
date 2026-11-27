@@ -88,6 +88,16 @@ struct FreeBoardView: View {
         .sheet(item: $selectedIdea) { idea in
             IdeaDetailView(idea: idea)
         }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    BoardCardFinder()
+                } label: {
+                    Label("Find a card", systemImage: "magnifyingglass")
+                }
+                .accessibilityIdentifier("board.find")
+            }
+        }
         .alert("Board", isPresented: Binding(
             get: { boardNotice != nil },
             set: { if !$0 { boardNotice = nil } }
@@ -119,6 +129,57 @@ struct FreeBoardView: View {
         if point.x < 510 { return .ideas }
         if point.x < 750 { return .maybe }
         return .needsInfo
+    }
+}
+
+private struct BoardCardFinder: View {
+    @EnvironmentObject private var board: BoardViewModel
+    @State private var query = ""
+    @State private var editing: IdeaItem?
+    @FocusState private var typing: Bool
+
+    private var results: [IdeaItem] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return board.ideas.filter { idea in
+            term.isEmpty || ([idea.title, idea.locationName] + idea.tags).contains { $0.localizedStandardContains(term) }
+        }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TextField("Title, place, or tag", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .focused($typing)
+                .accessibilityIdentifier("board.find.query")
+                .padding()
+            List {
+                Section {
+                    ForEach(results) { idea in
+                        Button {
+                            typing = false
+                            editing = idea
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text(idea.title)
+                                Text(idea.locationName.isEmpty ? idea.group.title : idea.locationName)
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .accessibilityIdentifier("board.result.\(idea.id)")
+                    }
+                } header: {
+                    Text("\(results.count) cards").accessibilityIdentifier("board.find.count")
+                }
+            }
+            .overlay {
+                if results.isEmpty { ContentUnavailableView.search(text: query) }
+            }
+        }
+        .navigationTitle("Find a card")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { typing = true }
+        .sheet(item: $editing) { IdeaDetailView(idea: $0) }
     }
 }
 

@@ -20,6 +20,8 @@ struct SchedulePlannerView: View {
     @State private var travelRefreshID = UUID()
     @State private var selectedTrayCard: UUID?
     @State private var choosingCardFor: TrayBasket?
+    @State private var movingPlacement: EventItem?
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var basketFrames: [TrayBasket: CGRect] = [:]
     @State private var trayDrag: TrayDrag?
 
@@ -56,9 +58,15 @@ struct SchedulePlannerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
-                .datePickerStyle(.compact)
-                .padding()
+            HStack {
+                dayArrow(-1)
+                Spacer()
+                DatePicker("Plan date", selection: $selectedDate, displayedComponents: .date)
+                    .datePickerStyle(.compact).labelsHidden()
+                Spacer()
+                dayArrow(1)
+            }
+            .padding(.horizontal)
 
             Picker("Travel", selection: $selectedTravelMode) {
                 ForEach(TravelMode.allCases) { mode in
@@ -110,6 +118,19 @@ struct SchedulePlannerView: View {
             }
         }
         .onPreferenceChange(BasketFramesKey.self) { basketFrames = $0 }
+        .sheet(item: $movingPlacement) { original in
+            MovePlacementSheet(event: original) { day, part in
+                movingPlacement = nil
+                guard scheduleViewModel.rescheduleRough(original.id, on: day, part: part),
+                      let moved = scheduleViewModel.events.first(where: { $0.id == original.id }),
+                      original != moved else { return }
+                selectedDate = day
+                undoViewModel.register(title: "Moved to \(day.formatted(.dateTime.weekday(.wide)))",
+                                       message: moved.title, autoDismissSeconds: 15) {
+                    if scheduleViewModel.undoReschedule(from: moved, to: original) { selectedDate = original.startDate }
+                }
+            }
+        }
         .overlay(alignment: .topLeading) {
             if let trayDrag {
                 MagnetCardView(idea: trayDrag.idea, mode: .dragPreview)
@@ -133,6 +154,15 @@ struct SchedulePlannerView: View {
         } message: {
             Text(exportMessage ?? "")
         }
+    }
+
+    private func dayArrow(_ offset: Int) -> some View {
+        Button {
+            if let date = Calendar.current.date(byAdding: .day, value: offset, to: selectedDate) { selectedDate = date }
+        } label: {
+            Image(systemName: offset < 0 ? "chevron.left" : "chevron.right").frame(width: 44, height: 44)
+        }
+        .accessibilityLabel(offset < 0 ? "Previous day" : "Next day")
     }
 
     private var trayIdeas: [IdeaItem] {
@@ -288,12 +318,13 @@ struct SchedulePlannerView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Add to day")
                 .font(.headline)
-            HStack(spacing: 10) {
+            let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
+            layout {
                 basketView(.morning, subtitle: "rough, not exact")
                 basketView(.afternoon, subtitle: "rough, not exact")
                 basketView(.evening, subtitle: "rough, not exact")
             }
-            HStack(spacing: 10) {
+            layout {
                 basketView(.dayOnly, subtitle: "flexible")
                 basketView(.mustDo, subtitle: "flexible, but important")
             }
@@ -373,6 +404,7 @@ struct SchedulePlannerView: View {
                         onSetExactTime: { newStart in
                             scheduleViewModel.setExactTime(event, startDate: newStart)
                         },
+                        onMovePlacement: { movingPlacement = event },
                         onSetRoughPlacement: { precision, dayPart, mustDo in
                             scheduleViewModel.setRoughPlacement(event, precision: precision, dayPart: dayPart)
                             if let mustDo { scheduleViewModel.setMustDo(event, mustDo) }
@@ -904,6 +936,7 @@ struct ScheduledEventRow: View {
     let onManualTravelEstimate: (_ nextID: UUID, _ minutes: Double, _ note: String?) -> Void
     let onClearManualTravelEstimate: () -> Void
     let onSetExactTime: (_ startDate: Date) -> Void
+    let onMovePlacement: () -> Void
     let onSetRoughPlacement: (_ precision: SchedulePrecision, _ dayPart: DayPart?, _ mustDo: Bool?) -> Void
     let onMoveEarlier: () -> Void
     let onMoveLater: () -> Void
@@ -928,7 +961,11 @@ struct ScheduledEventRow: View {
                 Text(event.category.cuteEmoji)
                     .font(.title2)
                     .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
+                Button {
+                    if event.schedulePrecision == .exactTime { showingExactTimeSheet = true }
+                    else { onMovePlacement() }
+                } label: {
+                  VStack(alignment: .leading, spacing: 3) {
                     Text(event.title)
                         .font(.headline)
                     HStack(spacing: 5) {
@@ -937,11 +974,21 @@ struct ScheduledEventRow: View {
                             Label("Locked", systemImage: "lock.fill")
                                 .font(.caption2)
                                 .foregroundStyle(.red)
+                        } else {
+                            Image(systemName: "chevron.right")
                         }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                  }
+                  .frame(minHeight: 44, alignment: .leading)
+                  .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .disabled(event.isLocked)
+                .accessibilityLabel("Planned card, \(event.title), \(schedulePlacementLabel)")
+                .accessibilityIdentifier("planned.card.\(event.ideaID.uuidString)")
+                .accessibilityHint(event.isLocked ? "Locked placement" : "Change the date or time.")
                 Spacer()
                 Menu {
                     Button(event.isLocked ? "Unlock" : "Lock") { onLockToggle() }
@@ -1013,12 +1060,6 @@ struct ScheduledEventRow: View {
                 )
         )
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(event.category.cuteTint.opacity(0.24), lineWidth: 0.8))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Planned card, \(event.title), \(schedulePlacementLabel)")
-        .accessibilityIdentifier("planned.card.\(event.ideaID.uuidString)")
-        .accessibilityHint(event.isLocked || event.schedulePrecision == .exactTime
-                           ? "Use the actions menu for options."
-                           : "Drag to reorder within this time bucket, or use the actions menu.")
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) { onDelete() } label: {
                 Label("Delete", systemImage: "trash")
@@ -1235,7 +1276,7 @@ struct ScheduledRowDrag: ViewModifier {
             content
         } else {
             content
-                .overlay(RoundedRectangle(cornerRadius: 20).stroke(isTargeted ? Color.accentColor : .clear, lineWidth: 2))
+                .overlay(RoundedRectangle(cornerRadius: 20).stroke(isTargeted ? Color.accentColor : .clear, lineWidth: 2).allowsHitTesting(false))
                 .onDrag {
                     Haptics.lightImpact()
                     return PlannerDragPayload.provider(for: event.id, type: PlannerDragPayload.placement)
