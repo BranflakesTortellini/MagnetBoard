@@ -188,7 +188,9 @@ final class CardJourneyTests: XCTestCase {
         XCTAssertTrue(field.isHittable, "Could not reach the new-card title")
         field.tap()
         field.typeText(title)
-        XCTAssertEqual(field.value as? String, title, "The title field did not accept the requested name")
+        let fullTitle = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", title), object: field)
+        XCTAssertEqual(XCTWaiter.wait(for: [fullTitle], timeout: 12), .completed,
+                       "The title field did not accept the requested name")
         let save = app.buttons["newIdea.save"]
         XCTAssertTrue(save.isEnabled)
         save.tap()

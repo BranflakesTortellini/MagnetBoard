@@ -162,7 +162,7 @@ struct SchedulePlannerView: View {
                             .overlay {
                                 GeometryReader { proxy in
                                     let origin = proxy.frame(in: .named(TrayBasket.space)).origin
-                                    TrayCardControl(label: card.accessibilityLabelText, id: idea.id,
+                                    MagnetCardControl(label: card.accessibilityLabelText, id: idea.id,
                                                     selected: selectedTrayCard == idea.id) {
                                         selectedTrayCard = selectedTrayCard == idea.id ? nil : idea.id
                                         PlannerDragPayload.trace("Tapped tray card")

@@ -182,11 +182,16 @@ struct MagnetCardView: View {
 }
 
 /// A native button lets the enclosing scroll views handle immediate swipes.
-/// Only a stationary hold starts a drag; a normal tap selects the card.
-struct TrayCardControl: UIViewRepresentable {
+/// Only a stationary hold starts a drag; a normal tap selects or opens the card.
+struct MagnetCardControl: UIViewRepresentable {
+    enum Surface {
+        case tray
+        case board(BoardGroup)
+    }
     let label: String
     let id: UUID
     let selected: Bool
+    var surface: Surface = .tray
     let tap: () -> Void
     let moved: (CGPoint?) -> Void
     let released: (CGPoint) -> Void
@@ -205,24 +210,41 @@ struct TrayCardControl: UIViewRepresentable {
 
     func updateUIView(_ button: UIButton, context: Context) {
         context.coordinator.control = self
-        button.accessibilityIdentifier = "tray.card.\(id.uuidString)"
         button.accessibilityLabel = label
-        button.accessibilityHint = "Tap to select, then tap a basket. Or hold and drag to a basket."
+        switch surface {
+        case .tray:
+            button.accessibilityIdentifier = "tray.card.\(id.uuidString)"
+            button.accessibilityHint = "Tap to select, then tap a basket. Or hold and drag to a basket."
+            button.accessibilityValue = nil
+        case .board(let group):
+            button.accessibilityIdentifier = "board.card.\(id.uuidString)"
+            button.accessibilityHint = "Tap to edit. Hold and drag to move this card."
+            button.accessibilityValue = group.title
+        }
         button.accessibilityTraits = selected ? [.button, .selected] : [.button]
     }
 
     @MainActor final class Coordinator: NSObject {
-        var control: TrayCardControl
-        init(_ control: TrayCardControl) { self.control = control }
+        var control: MagnetCardControl
+        private var start: CGPoint?
+        init(_ control: MagnetCardControl) { self.control = control }
         @objc func tapCard() { control.tap() }
         @objc func hold(_ gesture: UILongPressGestureRecognizer) {
-            // The point remains relative to the source even after the finger
-            // moves outside the horizontal tray, until release or cancellation.
-            let point = gesture.location(in: gesture.view)
+            let point: CGPoint
+            switch control.surface {
+            case .tray:
+                point = gesture.location(in: gesture.view)
+            case .board:
+                // The note follows the finger, so measure movement in the stationary window.
+                let location = gesture.location(in: gesture.view?.window)
+                if gesture.state == .began { start = location }
+                let origin = start ?? location
+                point = CGPoint(x: location.x - origin.x, y: location.y - origin.y)
+            }
             switch gesture.state {
             case .began, .changed: control.moved(point)
-            case .ended: control.released(point)
-            case .cancelled, .failed: control.moved(nil)
+            case .ended: start = nil; control.released(point)
+            case .cancelled, .failed: start = nil; control.moved(nil)
             default: break
             }
         }

@@ -7,7 +7,7 @@ struct FreeBoardView: View {
     @EnvironmentObject var boardViewModel: BoardViewModel
     @Binding var showingAddIdea: Bool
     @State private var selectedIdea: IdeaItem?
-    @GestureState private var boardDrag: BoardDrag?
+    @State private var boardDrag: BoardDrag?
     @State private var boardNotice: String?
     @AppStorage(PlanningSettingsKeys.reduceMotion) private var reduceMotion = false
 
@@ -50,16 +50,26 @@ struct FreeBoardView: View {
                     BoardBackground(size: canvasSize)
 
                     ForEach(boardViewModel.ideas) { idea in
-                        MagnetCardView(idea: idea, mode: .board)
-                            // Resolve taps and holds on the note, not its canvas-sized position wrapper.
-                            .contentShape(Rectangle())
-                            .gesture(boardMoveGesture(for: idea).exclusively(before:
-                                TapGesture().onEnded { selectedIdea = idea }
-                            ))
-                            .accessibilityAddTraits(.isButton)
-                            .accessibilityAction { selectedIdea = idea }
-                            .accessibilityValue(Text(idea.group.title))
-                            .accessibilityIdentifier("board.card.\(idea.id.uuidString)")
+                        let card = MagnetCardView(idea: idea, mode: .board)
+                        card
+                            .accessibilityHidden(true)
+                            .overlay {
+                                GeometryReader { proxy in
+                                    MagnetCardControl(label: card.accessibilityLabelText, id: idea.id,
+                                                      selected: false, surface: .board(idea.group)) {
+                                        selectedIdea = idea
+                                    } moved: { delta in
+                                        boardDrag = delta.map { BoardDrag(ideaID: idea.id, position: boardDropPosition(idea, delta: $0)) }
+                                    } released: { delta in
+                                        boardDrag = nil
+                                        guard delta != .zero else { return }
+                                        let position = boardDropPosition(idea, delta: delta)
+                                        boardViewModel.moveIdea(idea.id, x: position.x, y: position.y, group: groupForBoardPosition(position))
+                                        Haptics.success()
+                                    }
+                                    .frame(width: proxy.size.width, height: proxy.size.height)
+                                }
+                            }
                             .position(boardPosition(for: idea))
                             .scaleEffect(!reduceMotion && liftedIdeaID == idea.id ? 1.05 : 1.0)
                             .shadow(color: Color.black.opacity(liftedIdeaID == idea.id ? 0.24 : 0.10), radius: liftedIdeaID == idea.id ? 18 : 4, x: 0, y: liftedIdeaID == idea.id ? 14 : 3)
@@ -69,7 +79,6 @@ struct FreeBoardView: View {
                     }
                 }
                 .frame(width: canvasSize.width, height: canvasSize.height)
-                .coordinateSpace(name: "magnet-board-canvas")
             }
             .accessibilityIdentifier("board.canvas")
         }
@@ -89,41 +98,15 @@ struct FreeBoardView: View {
         }
     }
 
-    /// iPhone-friendly board movement: tap edits; touch-and-hold lifts the
-    /// sticky note; then dragging moves it. This avoids most accidental moves
-    /// while scrolling the two-axis board.
-    private func boardMoveGesture(for idea: IdeaItem) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.35)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("magnet-board-canvas")))
-            .updating($boardDrag) { value, state, _ in
-                switch value {
-                case .first(true):
-                    state = BoardDrag(ideaID: idea.id, position: CGPoint(x: idea.boardX, y: idea.boardY))
-                case .second(true, let drag?):
-                    state = BoardDrag(ideaID: idea.id, position: clampedPosition(for: idea, translation: drag.translation))
-                default:
-                    break
-                }
-            }
-            .onEnded { value in
-                guard case .second(true, let drag?) = value,
-                      drag.translation != .zero else { return }
-                let position = clampedPosition(for: idea, translation: drag.translation)
-                // Gesture state resets on cancellation. Persist only the completed move.
-                boardViewModel.moveIdea(idea.id, x: position.x, y: position.y, group: groupForBoardPosition(position))
-                Haptics.success()
-            }
-    }
-
     private func boardPosition(for idea: IdeaItem) -> CGPoint {
         if let boardDrag, boardDrag.ideaID == idea.id { return boardDrag.position }
         return CGPoint(x: idea.boardX, y: idea.boardY)
     }
 
-    private func clampedPosition(for idea: IdeaItem, translation: CGSize) -> CGPoint {
+    private func boardDropPosition(_ idea: IdeaItem, delta: CGPoint) -> CGPoint {
         CGPoint(
-            x: max(70, min(900, CGFloat(idea.boardX) + translation.width)),
-            y: max(70, min(canvasSize.height - 100, CGFloat(idea.boardY) + translation.height))
+            x: max(70, min(900, CGFloat(idea.boardX) + delta.x)),
+            y: max(70, min(canvasSize.height - 100, CGFloat(idea.boardY) + delta.y))
         )
     }
 
