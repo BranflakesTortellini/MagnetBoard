@@ -106,6 +106,39 @@ final class CardJourneyTests: XCTestCase {
     }
 
     @MainActor
+    func testCancelEditingBoardCardPreservesOriginal() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-welcome.hasSeenMagnetBoardIntro", "YES", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        let name = "Market \(Int.random(in: 100000...999999))"
+        app.buttons["board.newIdea"].tap()
+        let newTitle = app.textFields["newIdea.title"]
+        XCTAssertTrue(newTitle.waitForExistence(timeout: 10))
+        newTitle.tap()
+        newTitle.typeText(name)
+        XCTAssertEqual(newTitle.value as? String, name)
+        newTitle.typeText("\n")
+        let canvas = app.scrollViews["board.canvas"]
+        let original = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "board.card.", name + ",")).firstMatch
+        reveal([original], in: canvas)
+        let originalID = original.identifier
+        original.tap()
+        let title = app.textFields["cardDetails.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        title.tap()
+        title.typeText(" revised")
+        XCTAssertNotEqual(title.value as? String, name)
+        let nav = app.navigationBars["Card details"]
+        XCTAssertFalse(nav.buttons["Delete"].exists)
+        nav.buttons["Cancel"].tap()
+        let saved = app.descendants(matching: .any)[originalID]
+        XCTAssertTrue(saved.waitForExistence(timeout: 10), "Cancel deleted the original card")
+        XCTAssertTrue(saved.label.hasPrefix(name + ","), "Cancel saved the draft rename")
+    }
+
+    @MainActor
     func testWelcomeAndCancelNewCard() {
         continueAfterFailure = false
         let app = XCUIApplication()

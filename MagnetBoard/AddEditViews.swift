@@ -296,6 +296,7 @@ struct IdeaDetailView: View {
             Form {
                 Section("Card") {
                     TextField("Title", text: $idea.title)
+                        .accessibilityIdentifier("cardDetails.title")
                     if idea.commitment == .scheduled || idea.commitment == .locked {
                         LabeledContent("State", value: idea.commitment.label)
                         Text("Scheduled and locked states are controlled from the Plan view so a card cannot claim to be scheduled without an actual scheduled placement.")
@@ -360,6 +361,11 @@ struct IdeaDetailView: View {
                             .foregroundStyle(.orange)
                     }
                 }
+                Section {
+                    Button(role: .destructive, action: deleteCardWithUndo) {
+                        Label("Delete card", systemImage: "trash")
+                    }
+                }
             }
             .navigationTitle("Card details")
             .sheet(isPresented: $showingLocationSearch) {
@@ -373,9 +379,7 @@ struct IdeaDetailView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Delete", role: .destructive) {
-                        deleteCardWithUndo()
-                    }
+                    Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
