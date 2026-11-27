@@ -6,7 +6,11 @@ import MapKit
 @main
 @MainActor
 struct PlannerRegressionChecks {
-    static func main() throws {
+    static func main() async throws {
+        if CommandLine.arguments.contains("--probe-hamburg-transit") {
+            await sampleHamburgTransit()
+            return
+        }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -22,6 +26,23 @@ struct PlannerRegressionChecks {
         checkDestinationClock(file: directory.appendingPathComponent("hamburg-clock.json"))
         try checkDamagedSave(day, file: directory.appendingPathComponent("damaged.json"))
         print("Planner regression checks passed.")
+    }
+
+    /// Non-gating service diagnostic. Query near today's timetable, not the
+    /// fixed future date used for the reproducible iPhone regression.
+    static func sampleHamburgTransit() async {
+        let clock = TripClock(zone: TimeZone(identifier: "Europe/Berlin")!)
+        let nextDay = clock.calendar.date(byAdding: .day, value: 1, to: Date())!
+        let departure = clock.calendar.date(bySettingHour: 15, minute: 0, second: 0, of: nextDay)!
+        let vm = ScheduleViewModel(saveURL: nil, deviceZone: clock.zone)
+        print("Live Hamburg transit: \(clock.date(departure)), depart \(clock.time(departure)) from Kunsthalle towards Speicherstadt.")
+        let (result, _) = await vm.travelEstimate(from: .init(latitude: 53.555, longitude: 10.003),
+            to: .init(latitude: 53.543, longitude: 9.988), mode: .transit, departureDate: departure)
+        if let seconds = result.seconds {
+            print("Live Hamburg transit: \(result.label); arrival \(clock.time(departure.addingTimeInterval(seconds))).")
+        } else {
+            print("Live Hamburg transit unavailable: \(result.label). No live duration verified.")
+        }
     }
 
     static func checkDestinationClock(file: URL) {
