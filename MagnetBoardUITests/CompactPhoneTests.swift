@@ -26,6 +26,7 @@ final class CompactPhoneTests: XCTestCase {
         let field = app.textFields["planPicker.title"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()
+        app.dismissSystemKeyboardIntro()
         let title = "Tea \(Int.random(in: 10000...99999))"
         field.typeText(title)
         let keyboard = app.keyboards.firstMatch
@@ -36,13 +37,8 @@ final class CompactPhoneTests: XCTestCase {
         // lowercase label, depending on keyboard layout.
         let done = keyboard.descendants(matching: .any).matching(NSPredicate(
             format: "label ==[c] %@ OR identifier ==[c] %@", "done", "done")).firstMatch
-        XCTAssertTrue(done.exists && !done.frame.isEmpty && app.frame.contains(done.frame))
-        // The remote system keyboard can report no XCTest hit point even when
-        // the key is fully on screen. Tap its actual screen location, then
-        // require the app to confirm a real placement and a successful Undo.
-        let keyFrame = done.frame
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
-            dx: keyFrame.midX - app.frame.minX, dy: keyFrame.midY - app.frame.minY)).tap()
+        XCTAssertTrue(done.isHittable && !done.frame.isEmpty && app.frame.contains(done.frame))
+        done.tap()
         let undo = app.buttons["Undo"]
         guard undo.waitForExistence(timeout: 10) else {
             print(app.debugDescription)

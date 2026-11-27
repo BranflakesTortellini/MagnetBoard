@@ -16,7 +16,8 @@ final class CardJourneyTests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 10))
         let title = "Lakeside \(Int.random(in: 100000...999999))"
         input.tap()
-        input.typeText(title)
+        app.dismissSystemKeyboardIntro()
+        input.enterName(title)
         XCTAssertEqual(input.value as? String, title)
         input.typeText("\n")
 
@@ -29,7 +30,7 @@ final class CardJourneyTests: XCTestCase {
         evening.tap()
         XCTAssertTrue(input.waitForExistence(timeout: 10))
         input.tap()
-        input.typeText(title)
+        input.enterName(title)
         XCTAssertEqual(input.value as? String, title)
         let existing = app.buttons["planPicker.card.\(id)"]
         XCTAssertTrue(existing.waitForExistence(timeout: 8))
@@ -187,7 +188,8 @@ final class CardJourneyTests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 12))
         XCTAssertTrue(field.isHittable, "Could not reach the new-card title")
         field.tap()
-        field.typeText(title)
+        app.dismissSystemKeyboardIntro()
+        field.enterName(title)
         let fullTitle = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", title), object: field)
         XCTAssertEqual(XCTWaiter.wait(for: [fullTitle], timeout: 12), .completed,
                        "The title field did not accept the requested name")
@@ -382,4 +384,33 @@ final class CardJourneyTests: XCTestCase {
 
 private extension CGRect {
     var centerPoint: CGPoint { CGPoint(x: midX, y: midY) }
+}
+
+extension XCUIApplication {
+    @MainActor
+    func dismissSystemKeyboardIntro() {
+        // A fresh simulator shows a keyboard preview with real-looking but
+        // untappable keys behind Apple's one-time Slide to Type introduction.
+        let continueButton = otherElements["UIContinuousPathIntroductionView"].buttons["Continue"]
+        if continueButton.waitForExistence(timeout: 3) { continueButton.tap() }
+    }
+}
+
+private extension XCUIElement {
+    @MainActor
+    func enterName(_ name: String) {
+        // A busy simulator can drop events from one burst of synthetic input.
+        // Verify every group without retrying or correcting the app's text.
+        var remaining = name[...]
+        var expected = ""
+        while !remaining.isEmpty {
+            let group = remaining.prefix(3)
+            typeText(String(group))
+            expected += group
+            remaining = remaining.dropFirst(group.count)
+            let received = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: self)
+            XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 10), .completed,
+                           "Expected '\(expected)', received '\(value ?? "<empty>")'")
+        }
+    }
 }
