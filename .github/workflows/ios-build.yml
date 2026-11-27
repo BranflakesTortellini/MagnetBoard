@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [everyday, compact-large-text]
+        profile: [everyday, compact-large-text, change-of-plans]
     timeout-minutes: 45
 
     steps:
@@ -51,8 +51,13 @@ jobs:
             echo "EXPECTED_TESTS=1" >> "$GITHUB_ENV"
           else
             iphone=$(xcrun simctl list devices available --json | python3 .github/scripts/select_iphone.py "$sdk")
-            echo "UI_SUITE=CardJourneyTests" >> "$GITHUB_ENV"
-            echo "EXPECTED_TESTS=8" >> "$GITHUB_ENV"
+            if [[ "$PROFILE" == "change-of-plans" ]]; then
+              echo "UI_SUITE=ChangeOfPlansTests" >> "$GITHUB_ENV"
+              echo "EXPECTED_TESTS=1" >> "$GITHUB_ENV"
+            else
+              echo "UI_SUITE=CardJourneyTests" >> "$GITHUB_ENV"
+              echo "EXPECTED_TESTS=8" >> "$GITHUB_ENV"
+            fi
           fi
           echo "IPHONE_UDID=$iphone" >> "$GITHUB_ENV"
 
@@ -96,5 +101,5 @@ jobs:
             -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
             -target "$(uname -m)-apple-macosx14.0" \
             MagnetBoard/Models.swift MagnetBoard/BoardViewModel.swift MagnetBoard/ScheduleViewModel.swift \
-            Tests/PlannerRegressionChecks.swift -o "$RUNNER_TEMP/planner-checks"
+            MagnetBoard/NearbyBackups.swift Tests/HamburgWeekChecks.swift Tests/PlannerRegressionChecks.swift -o "$RUNNER_TEMP/planner-checks"
           "$RUNNER_TEMP/planner-checks"

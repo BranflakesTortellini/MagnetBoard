@@ -21,6 +21,7 @@ struct SchedulePlannerView: View {
     @State private var selectedTrayCard: UUID?
     @State private var choosingCardFor: TrayBasket?
     @State private var movingPlacement: EventItem?
+    @State private var findingBackup: EventItem?
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var basketFrames: [TrayBasket: CGRect] = [:]
     @State private var trayDrag: TrayDrag?
@@ -118,6 +119,15 @@ struct SchedulePlannerView: View {
             }
         }
         .onPreferenceChange(BasketFramesKey.self) { basketFrames = $0 }
+        .sheet(item: $findingBackup) { stop in
+            PlanBSheet(stop: stop) { id, rainyOnly in
+                findingBackup = nil
+                chooseBackup(id, for: stop, rainyOnly: rainyOnly)
+            } onSkip: {
+                findingBackup = nil
+                if stop.canChangeForBackup, scheduleViewModel.events.contains(stop) { deleteScheduledEvent(stop) }
+            }
+        }
         .sheet(item: $movingPlacement) { original in
             MovePlacementSheet(event: original) { day, part in
                 movingPlacement = nil
@@ -405,6 +415,7 @@ struct SchedulePlannerView: View {
                             scheduleViewModel.setExactTime(event, startDate: newStart)
                         },
                         onMovePlacement: { movingPlacement = event },
+                        onFindBackup: { findingBackup = event },
                         onSetRoughPlacement: { precision, dayPart, mustDo in
                             scheduleViewModel.setRoughPlacement(event, precision: precision, dayPart: dayPart)
                             if let mustDo { scheduleViewModel.setMustDo(event, mustDo) }
@@ -465,6 +476,31 @@ struct SchedulePlannerView: View {
             startHour: preferredDayStartHour,
             endHour: preferredDayEndHour
         )
+    }
+
+    private func chooseBackup(_ id: UUID, for stop: EventItem, rainyOnly: Bool) {
+        guard let previousCard = boardViewModel.ideas.first(where: { $0.id == id }),
+              let replacement = scheduleViewModel.useBackup(id, insteadOf: stop, board: boardViewModel.ideas, rainyOnly: rainyOnly) else {
+            exportMessage = "The plan changed. Open Plan B again for the current choices."
+            return
+        }
+        refreshBoardCommitments(for: [stop, replacement])
+        Haptics.success()
+        undoViewModel.register(title: "Changed this stop", message: replacement.title, autoDismissSeconds: 20) {
+            guard let originalIdea = boardViewModel.ideas.first(where: { $0.id == stop.ideaID }),
+                  scheduleViewModel.undoBackup(replacement, restoring: stop, originalIdea: originalIdea) else {
+                exportMessage = "This stop changed again, so the earlier plan wasn't restored."
+                return
+            }
+            refreshBoardCommitments(for: [stop])
+            if !scheduleViewModel.hasScheduledInstance(for: id), var card = boardViewModel.ideas.first(where: { $0.id == id }) {
+                if card.group == .scheduledSoon { card.group = previousCard.group }
+                card.commitment = previousCard.commitment
+                boardViewModel.updateIdea(card)
+            } else {
+                refreshBoardCommitments(for: [replacement])
+            }
+        }
     }
 
     private func deleteScheduledEvent(_ event: EventItem) {
@@ -937,6 +973,7 @@ struct ScheduledEventRow: View {
     let onClearManualTravelEstimate: () -> Void
     let onSetExactTime: (_ startDate: Date) -> Void
     let onMovePlacement: () -> Void
+    let onFindBackup: () -> Void
     let onSetRoughPlacement: (_ precision: SchedulePrecision, _ dayPart: DayPart?, _ mustDo: Bool?) -> Void
     let onMoveEarlier: () -> Void
     let onMoveLater: () -> Void
@@ -1026,6 +1063,12 @@ struct ScheduledEventRow: View {
                     Image(systemName: "ellipsis.circle")
                         .font(.title3)
                 }
+            }
+
+            if event.canChangeForBackup {
+                Button(action: onFindBackup) { Label("Plan B", systemImage: "arrow.triangle.branch") }
+                    .accessibilityLabel("Plan B for \(event.title)")
+                    .accessibilityIdentifier("planned.backup.\(event.id)")
             }
 
             if !event.locationName.isEmpty {

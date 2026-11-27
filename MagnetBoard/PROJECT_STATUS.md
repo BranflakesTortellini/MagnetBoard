@@ -141,6 +141,10 @@ From Windows, once the workflow is on the default branch, open **Actions > iOS B
 
 The everyday iPhone suite covers eight journeys: create, drag, schedule and relaunch; tap to schedule a repeatable card; first-run help and canceling a draft; prevent a duplicate evening card; pick a card by name and undo; cancel a board edit; move a morning placement to tomorrow afternoon; and find, rename and reopen one of 30 overlapping cards. An independent iPhone SE suite checks accessibility-size type, the software keyboard, and Undo. Both jobs require their full test counts with no skips. The separate macOS checks exercise the production planner models. These tests do not exercise live Maps requests or Calendar permissions.
 
+The change-of-plans iPhone suite builds a seven-day Hamburg itinerary on an isolated simulator board. It cancels an unpinned outdoor stop, moves a visitor outing later, replaces a closed market with a previously saved nearby rainy-day idea, uses Undo, and checks each day after relaunch. The model scenario separately protects fixed bookings, excludes overlong and already-booked alternatives, and checks persisted placement identities. None of the fictional stops, closures or weather are bundled as starter ideas.
+
+**Plan B:** An unlocked, unexported rough stop can be skipped without deleting its idea, or replaced with a saved idea within 2 km of its pin. Distances are straight-line, not walking estimates. Known durations must fit the stop; unknown durations keep its rough slot. The rain filter uses explicit indoor/rainy-day tags. No device GPS, live opening hours, weather service, or Calendar writes are needed.
+
 ## Next user acceptance checks
 
 | Priority | Try it as a planner | What must hold |

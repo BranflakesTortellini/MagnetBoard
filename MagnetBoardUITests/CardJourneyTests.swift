@@ -350,10 +350,13 @@ final class CardJourneyTests: XCTestCase {
         XCTAssertTrue(result.label.contains(edited))
     }
 
+}
+
+extension XCTestCase {
     /// Move the outer scroll view in small increments, keeping both gesture
     /// endpoints inside the actual viewport (not merely in the accessibility tree).
     @MainActor
-    private func reveal(_ items: [XCUIElement], in scroll: XCUIElement,
+    func reveal(_ items: [XCUIElement], in scroll: XCUIElement,
                         file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(scroll.waitForExistence(timeout: 8), file: file, line: line)
         let app = XCUIApplication()

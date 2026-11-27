@@ -16,6 +16,7 @@ struct PlannerRegressionChecks {
         try checkOldSave(day, file: directory.appendingPathComponent("legacy.json"))
         checkRepeatAndUndo(day, file: directory.appendingPathComponent("undo.json"))
         checkMoveAcrossDays(day, file: directory.appendingPathComponent("move.json"))
+        checkHamburgWeek(directory: directory)
         try checkDamagedSave(day, file: directory.appendingPathComponent("damaged.json"))
         print("Planner regression checks passed.")
     }

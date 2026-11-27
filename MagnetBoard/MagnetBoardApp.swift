@@ -5,7 +5,7 @@ import SwiftUI
 @MainActor
 struct MagnetBoardApp: App {
     @StateObject private var boardViewModel = MagnetBoardApp.makeBoard()
-    @StateObject private var scheduleViewModel = ScheduleViewModel()
+    @StateObject private var scheduleViewModel = MagnetBoardApp.makeSchedule()
     @StateObject private var undoViewModel = DelightUndoViewModel()
 
     private static func makeBoard() -> BoardViewModel {
@@ -21,6 +21,15 @@ struct MagnetBoardApp: App {
         }
         #endif
         return BoardViewModel()
+    }
+
+    private static func makeSchedule() -> ScheduleViewModel {
+        #if DEBUG && targetEnvironment(simulator)
+        if let key = ProcessInfo.processInfo.environment["MAGNETBOARD_TEST_BOARD"], let id = UUID(uuidString: key) {
+            return ScheduleViewModel(saveURL: FileManager.default.temporaryDirectory.appendingPathComponent("plan-\(id).json"))
+        }
+        #endif
+        return ScheduleViewModel()
     }
 
     var body: some Scene {
