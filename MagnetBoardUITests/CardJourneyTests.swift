@@ -332,10 +332,14 @@ final class CardJourneyTests: XCTestCase {
         let title = app.textFields["cardDetails.title"]
         XCTAssertTrue(title.waitForExistence(timeout: 8))
         XCTAssertEqual(title.value as? String, "Gallery 1")
-        title.tap()
-        title.typeText(" North")
-        let edited = try XCTUnwrap(title.value as? String)
-        XCTAssertTrue(edited.contains("North"))
+        // Tap beyond the existing text to place the caret at the end, as a
+        // user would when correcting a room number. Verify the full new name.
+        title.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
+        title.typeText("B")
+        let edited = "Gallery 1B"
+        let renamed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", edited), object: title)
+        XCTAssertEqual(XCTWaiter.wait(for: [renamed], timeout: 10), .completed,
+                       "Expected \(edited), got \(title.value ?? "<empty>")")
         app.buttons["Save"].tap()
         app.terminate()
         app.launchEnvironment.removeValue(forKey: "MAGNETBOARD_TEST_IDEAS")
@@ -343,7 +347,7 @@ final class CardJourneyTests: XCTestCase {
         find.tap()
         XCTAssertTrue(app.staticTexts["board.find.count"].label.contains("30"))
         field.tap()
-        field.typeText("North")
+        field.typeText("1B")
         XCTAssertTrue(result.waitForExistence(timeout: 8))
         XCTAssertTrue(result.label.contains(edited))
     }
