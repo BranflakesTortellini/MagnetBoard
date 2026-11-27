@@ -1,6 +1,7 @@
 import Foundation
 import MapKit
 import CoreLocation
+import Combine
 
 /// One MapKit place result the user can attach to a magnet card.
 public struct LocationSearchResult: Identifiable, Hashable {
@@ -29,6 +30,7 @@ public final class LocationSearchViewModel: ObservableObject {
 
     private var searchBiasCoordinate: CodableCoordinate
     private var activeSearch: MKLocalSearch?
+    private var searchID = UUID()
 
     public init(initialQuery: String = "") {
         self.query = initialQuery
@@ -42,14 +44,14 @@ public final class LocationSearchViewModel: ObservableObject {
     }
 
     public func search() {
+        cancelSearch()
+        results = []
         let cleaned = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else {
-            results = []
             message = "Type a place, address, or neighborhood first."
             return
         }
 
-        activeSearch?.cancel()
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = cleaned
         if useSearchBias {
@@ -66,9 +68,11 @@ public final class LocationSearchViewModel: ObservableObject {
         isSearching = true
         message = nil
 
+        let requestID = searchID
         search.start { [weak self] response, error in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.searchID == requestID else { return }
+                self.activeSearch = nil
                 self.isSearching = false
 
                 if let error {
@@ -86,14 +90,24 @@ public final class LocationSearchViewModel: ObservableObject {
                         item.placemark.country
                     ].compactMap { $0 }.filter { !$0.isEmpty }
                     let subtitle = subtitleParts.joined(separator: ", ")
+                    var pin = CodableCoordinate(item.placemark.coordinate)
+                    pin.countryCode = item.placemark.isoCountryCode
+                    pin.timeZoneID = item.timeZone?.identifier
                     return LocationSearchResult(
                         name: name,
                         subtitle: subtitle,
-                        coordinate: CodableCoordinate(item.placemark.coordinate)
+                        coordinate: pin
                     )
                 }
                 self.message = self.results.isEmpty ? "No matching places found. You can still keep a loose location name or use a manual travel estimate." : nil
             }
         }
+    }
+
+    func cancelSearch() {
+        searchID = UUID()
+        activeSearch?.cancel()
+        activeSearch = nil
+        isSearching = false
     }
 }

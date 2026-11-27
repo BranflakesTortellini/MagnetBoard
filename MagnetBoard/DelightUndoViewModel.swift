@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import Combine
 
 /// Lightweight, app-wide undo/toast controller for high-risk actions.
 ///
@@ -28,10 +29,14 @@ public final class DelightUndoViewModel: ObservableObject {
                          undo: @escaping () -> Void) {
         dismissWorkItem?.cancel()
         undoAction = undo
-        banner = UndoBanner(title: title, message: message, systemImage: systemImage)
+        let newBanner = UndoBanner(title: title, message: message, systemImage: systemImage)
+        banner = newBanner
 
-        let workItem = DispatchWorkItem { [weak self] in
-            Task { @MainActor in self?.clear() }
+        let workItem = DispatchWorkItem { [weak self, bannerID = newBanner.id] in
+            Task { @MainActor in
+                guard let self, self.banner?.id == bannerID else { return }
+                self.clear()
+            }
         }
         dismissWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + max(1.0, autoDismissSeconds), execute: workItem)
@@ -80,7 +85,8 @@ struct UndoBannerView: View {
                         undoViewModel.undo()
                     }
                     .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(minHeight: 44)
                 }
                 .padding(12)
                 .background(.regularMaterial)

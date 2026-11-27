@@ -1,8 +1,12 @@
 import SwiftUI
 import MapKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - UIKit route map bridge
 
+#if canImport(UIKit)
 struct RouteMapView: UIViewRepresentable {
     let polylines: [MKPolyline]
 
@@ -37,3 +41,12 @@ struct RouteMapView: UIViewRepresentable {
         }
     }
 }
+#else
+struct RouteMapView: View {
+    let polylines: [MKPolyline]
+
+    var body: some View {
+        EmptyView()
+    }
+}
+#endif

@@ -2,6 +2,7 @@ import Foundation
 import EventKit
 import MapKit
 import CoreLocation
+import Combine
 
 /// View model for scheduled placements and optional system calendar integration.
 @MainActor
@@ -9,15 +10,41 @@ public final class ScheduleViewModel: ObservableObject {
     @Published public var events: [EventItem] = [] {
         didSet { save() }
     }
+    @Published private(set) var storageIssue: String?
+    @Published private(set) var clock: TripClock
+    private let clockDefaults: UserDefaults?
+    private static let zoneKey = "planning.destinationTimeZone"
+    private let transitETA: (MKDirections.Request) async throws -> TimeInterval
 
     private let eventStore = EKEventStore()
-    private let saveURL: URL
+    private let saveURL: URL?
     private var isLoading = false
+    private var canSave = true
+    private var isExportingToCalendar = false
 
-    public init() {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        self.saveURL = documents.appendingPathComponent("magnet_board_events.json")
+    public convenience init() {
+        self.init(saveURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("magnet_board_events.json"), clockDefaults: .standard)
+    }
+
+    init(saveURL: URL?, clockDefaults: UserDefaults? = nil, deviceZone: TimeZone = .current,
+         transitETA: @escaping (MKDirections.Request) async throws -> TimeInterval = { request in
+             let result = try await MKDirections(request: request).calculateETA()
+             return result.expectedTravelTime
+         }) {
+        self.saveURL = saveURL
+        self.clockDefaults = clockDefaults
+        self.transitETA = transitETA
+        let zone = clockDefaults?.string(forKey: Self.zoneKey).flatMap { TimeZone(identifier: $0) } ?? deviceZone
+        clock = TripClock(zone: zone)
+        // Anchor even the initial zone so a journey never silently retimes a plan.
+        clockDefaults?.set(zone.identifier, forKey: Self.zoneKey)
         load()
+    }
+
+    func useTripZone(_ zone: TimeZone) {
+        clockDefaults?.set(zone.identifier, forKey: Self.zoneKey)
+        clock = TripClock(zone: zone)
     }
 
     /// Creates an in-app scheduled item only. This intentionally does NOT write to Apple Calendar.
@@ -128,6 +155,39 @@ public final class ScheduleViewModel: ObservableObject {
         events[index].endDate = newStart.addingTimeInterval(duration)
     }
 
+    /// Move one placement, never the underlying idea or its other occurrences.
+    @discardableResult
+    func rescheduleRough(_ id: UUID, on date: Date, part: DayPart?) -> Bool {
+        guard let index = events.firstIndex(where: { $0.id == id }),
+              !events[index].isLocked, events[index].schedulePrecision != .exactTime else { return false }
+        var event = events[index]
+        let precision: SchedulePrecision = part == nil ? .dayOnly : .dayPart
+        if clock.calendar.isDate(date, inSameDayAs: event.startDate),
+           event.dayPart == part, event.schedulePrecision == precision { return true }
+        let duration = event.endDate.timeIntervalSince(event.startDate)
+        event.startDate = firstOpenSlot(on: date, preferredHour: part?.proxyHour ?? 12,
+                                        duration: duration, excluding: id)
+        event.endDate = event.startDate.addingTimeInterval(duration)
+        event.dayPart = part
+        event.schedulePrecision = precision
+        events[index] = event
+        return true
+    }
+
+    func undoReschedule(from moved: EventItem, to original: EventItem) -> Bool {
+        guard moved.id == original.id, let index = events.firstIndex(where: { $0.id == moved.id }) else { return false }
+        var current = events[index]
+        guard !current.isLocked, current.startDate == moved.startDate, current.endDate == moved.endDate,
+              current.dayPart == moved.dayPart, current.schedulePrecision == moved.schedulePrecision else { return false }
+        // Undo timing only; keep any unrelated edits made since the move.
+        current.startDate = original.startDate
+        current.endDate = original.endDate
+        current.dayPart = original.dayPart
+        current.schedulePrecision = original.schedulePrecision
+        events[index] = current
+        return true
+    }
+
     /// Promotes a rough scheduled placement into a real clock-time event.
     /// This is the moment where a sticky note becomes calendar-like.
     public func setExactTime(_ event: EventItem, startDate: Date) {
@@ -149,10 +209,10 @@ public final class ScheduleViewModel: ObservableObject {
         // and day-only cards in the middle unless manually reordered.
         let duration = max(events[index].endDate.timeIntervalSince(events[index].startDate), 15 * 60)
         let hour = precision == .dayPart ? (dayPart?.proxyHour ?? 12) : 12
-        var components = Calendar.current.dateComponents([.year, .month, .day], from: events[index].startDate)
+        var components = clock.calendar.dateComponents([.year, .month, .day], from: events[index].startDate)
         components.hour = hour
         components.minute = 0
-        if let newStart = Calendar.current.date(from: components) {
+        if let newStart = clock.calendar.date(from: components) {
             events[index].startDate = newStart
             events[index].endDate = newStart.addingTimeInterval(duration)
         }
@@ -171,42 +231,44 @@ public final class ScheduleViewModel: ObservableObject {
             return ["Nothing to auto-arrange yet. Add at least two rough, unlocked cards to this day."]
         }
 
-        let ordered = categoryAwareOrder(flexible, settings: settings)
-        var cursorByHour: [Int: Date] = [:]
-
-        for event in ordered {
-            guard let index = events.firstIndex(where: { $0.id == event.id }) else { continue }
-            let duration = max(events[index].endDate.timeIntervalSince(events[index].startDate), 15 * 60)
-            let hour = proxyHour(for: events[index])
-            let start = cursorByHour[hour] ?? dateAtHour(hour, on: date)
-            events[index].startDate = start
-            events[index].endDate = start.addingTimeInterval(duration)
-            cursorByHour[hour] = events[index].endDate.addingTimeInterval(15 * 60)
+        var updatedEvents = events
+        var run: [EventItem] = []
+        var reordered: [EventItem] = []
+        // Exact and locked rows are anchors. Only arrange adjacent rough cards
+        // within the same timing bucket between those anchors.
+        for event in dayEvents {
+            if let first = run.first, !canReorder(first, with: event) {
+                let ordered = categoryAwareOrder(run, settings: settings)
+                replaceRoughOrder(original: run, ordered: ordered, in: &updatedEvents)
+                if ordered != run { reordered.append(contentsOf: ordered) }
+                run.removeAll()
+            }
+            if canReorder(event, with: event) { run.append(event) }
         }
+        let ordered = categoryAwareOrder(run, settings: settings)
+        replaceRoughOrder(original: run, ordered: ordered, in: &updatedEvents)
+        if ordered != run { reordered.append(contentsOf: ordered) }
 
+        guard !reordered.isEmpty else {
+            return ["No rough cards needed reordering within their time buckets."]
+        }
+        events = updatedEvents
         var notes: [String] = ["Reordered rough cards using your sequence rules."]
-        if ordered.contains(where: { $0.isMustDo }) {
+        if reordered.contains(where: { $0.isMustDo }) {
             notes.append("Must-do cards were kept high priority inside their rough time bucket.")
         }
-        if ordered.contains(where: { $0.coordinate != nil }) {
+        if reordered.contains(where: { $0.coordinate != nil }) {
             notes.append("Nearby coordinates helped choose less silly transitions where possible.")
         }
         notes.append("Exact-time and locked items were left alone.")
         return notes
     }
 
-    private func proxyHour(for event: EventItem) -> Int {
-        if event.schedulePrecision == .dayPart, let dayPart = event.dayPart {
-            return dayPart.proxyHour
-        }
-        return 12
-    }
-
     private func dateAtHour(_ hour: Int, on date: Date) -> Date {
-        var components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        var components = clock.calendar.dateComponents([.year, .month, .day], from: date)
         components.hour = hour
         components.minute = 0
-        return Calendar.current.date(from: components) ?? date
+        return clock.calendar.date(from: components) ?? date
     }
 
     private func categoryAwareOrder(_ input: [EventItem], settings: SequenceRuleSettings) -> [EventItem] {
@@ -293,21 +355,12 @@ public final class ScheduleViewModel: ObservableObject {
         let neighborIndex = currentIndex + (direction < 0 ? -1 : 1)
         guard dayEvents.indices.contains(neighborIndex) else { return }
 
-        let current = dayEvents[currentIndex]
-        let neighbor = dayEvents[neighborIndex]
-        guard !current.isLocked, !neighbor.isLocked else { return }
-        guard let currentStorageIndex = events.firstIndex(where: { $0.id == current.id }),
-              let neighborStorageIndex = events.firstIndex(where: { $0.id == neighbor.id }) else { return }
-
-        let currentStart = events[currentStorageIndex].startDate
-        let currentEnd = events[currentStorageIndex].endDate
-        let neighborStart = events[neighborStorageIndex].startDate
-        let neighborEnd = events[neighborStorageIndex].endDate
-
-        events[currentStorageIndex].startDate = neighborStart
-        events[currentStorageIndex].endDate = neighborEnd
-        events[neighborStorageIndex].startDate = currentStart
-        events[neighborStorageIndex].endDate = currentEnd
+        let range = min(currentIndex, neighborIndex)...max(currentIndex, neighborIndex)
+        let original = Array(dayEvents[range])
+        guard canReorder(original[0], with: original[1]) else { return }
+        var updatedEvents = events
+        replaceRoughOrder(original: original, ordered: Array(original.reversed()), in: &updatedEvents)
+        events = updatedEvents
     }
 
     /// Reorders an unlocked scheduled row by dragging it before another row.
@@ -317,28 +370,52 @@ public final class ScheduleViewModel: ObservableObject {
     /// own duration and precision while reassigning the visible order's proxy start
     /// positions.
     public func reorderEvent(_ draggedID: UUID, before targetID: UUID, on date: Date) {
+        reorderEvent(draggedID, relativeTo: targetID, on: date, useTargetSlot: false)
+    }
+
+    func moveEvent(_ draggedID: UUID, onto targetID: UUID, on date: Date) {
+        reorderEvent(draggedID, relativeTo: targetID, on: date, useTargetSlot: true)
+    }
+
+    private func reorderEvent(_ draggedID: UUID, relativeTo targetID: UUID, on date: Date, useTargetSlot: Bool) {
         guard draggedID != targetID else { return }
 
-        var dayEvents = events(on: date)
+        let dayEvents = events(on: date)
         guard let fromIndex = dayEvents.firstIndex(where: { $0.id == draggedID }),
               let targetIndex = dayEvents.firstIndex(where: { $0.id == targetID }) else { return }
 
+        let lower = min(fromIndex, targetIndex)
+        let upper = max(fromIndex, targetIndex)
+        let original = Array(dayEvents[lower...upper])
         let dragged = dayEvents[fromIndex]
-        let target = dayEvents[targetIndex]
-        guard !dragged.isLocked, !target.isLocked else { return }
+        guard original.allSatisfy({ canReorder(dragged, with: $0) }) else { return }
 
-        let originalSlots = dayEvents.map { $0.startDate }
-        let moving = dayEvents.remove(at: fromIndex)
-        let adjustedTargetIndex = dayEvents.firstIndex(where: { $0.id == targetID }) ?? targetIndex
-        dayEvents.insert(moving, at: adjustedTargetIndex)
+        var ordered = original
+        ordered.remove(at: fromIndex - lower)
+        let insertionIndex = targetIndex - lower - (!useTargetSlot && fromIndex < targetIndex ? 1 : 0)
+        ordered.insert(dragged, at: insertionIndex)
+        guard ordered != original else { return }
+        var updatedEvents = events
+        replaceRoughOrder(original: original, ordered: ordered, in: &updatedEvents)
+        events = updatedEvents
+    }
 
-        for (slotIndex, event) in dayEvents.enumerated() {
-            guard let storageIndex = events.firstIndex(where: { $0.id == event.id }),
-                  originalSlots.indices.contains(slotIndex) else { continue }
-            let duration = max(events[storageIndex].endDate.timeIntervalSince(events[storageIndex].startDate), 15 * 60)
-            let newStart = originalSlots[slotIndex]
-            events[storageIndex].startDate = newStart
-            events[storageIndex].endDate = newStart.addingTimeInterval(duration)
+    private func canReorder(_ first: EventItem, with second: EventItem) -> Bool {
+        !first.isLocked && !second.isLocked && first.schedulePrecision != .exactTime &&
+            first.schedulePrecision == second.schedulePrecision && first.dayPart == second.dayPart
+    }
+
+    private func replaceRoughOrder(original: [EventItem], ordered: [EventItem], in updatedEvents: inout [EventItem]) {
+        guard original != ordered else { return }
+        // Each displayed slot owns both a timestamp and its storage index
+        // (the tiebreaker). Preserve both, including ties with stationary rows.
+        let storageSlots = original.compactMap { slot in updatedEvents.firstIndex { $0.id == slot.id } }
+        guard storageSlots.count == original.count else { return }
+        for ((index, event), originalEvent) in zip(zip(storageSlots, ordered), original) {
+            var moved = event
+            moved.startDate = originalEvent.startDate
+            moved.endDate = moved.startDate.addingTimeInterval(event.endDate.timeIntervalSince(event.startDate))
+            updatedEvents[index] = moved
         }
     }
 
@@ -348,17 +425,35 @@ public final class ScheduleViewModel: ObservableObject {
     public func setManualTravelEstimate(after event: EventItem,
                                         minutes: Double,
                                         note: String? = nil) {
-        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
-        let clampedMinutes = max(0, minutes)
-        events[index].manualTravelToNextSeconds = clampedMinutes * 60
+        _ = setManualTravelEstimate(after: event, to: nil, minutes: minutes, note: note)
+    }
+
+    func setManualTravelEstimate(after event: EventItem, to expectedNextID: UUID?,
+                                 minutes: Double, note: String?) -> Bool {
+        let seconds = minutes * 60
+        guard seconds.isFinite, seconds >= 0, seconds < Double(Int.max),
+              let index = events.firstIndex(where: { $0.id == event.id }) else { return false }
+        var updated = events[index]
+        let dayEvents = events(on: updated.startDate)
+        guard let position = dayEvents.firstIndex(where: { $0.id == event.id }),
+              dayEvents.indices.contains(position + 1) else { return false }
+        let nextID = dayEvents[position + 1].id
+        guard expectedNextID == nil || expectedNextID == nextID else { return false }
+        updated.manualTravelTarget = .placement(nextID)
+        updated.manualTravelToNextSeconds = seconds
         let cleanedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        events[index].manualTravelToNextNote = cleanedNote.isEmpty ? nil : cleanedNote
+        updated.manualTravelToNextNote = cleanedNote.isEmpty ? nil : cleanedNote
+        events[index] = updated
+        return true
     }
 
     public func clearManualTravelEstimate(after event: EventItem) {
         guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
-        events[index].manualTravelToNextSeconds = nil
-        events[index].manualTravelToNextNote = nil
+        var updated = events[index]
+        updated.manualTravelToNextSeconds = nil
+        updated.manualTravelToNextNote = nil
+        updated.manualTravelTarget = nil
+        events[index] = updated
     }
 
     /// Writes a scheduled in-app item to Apple Calendar only when the user asks.
@@ -367,15 +462,42 @@ public final class ScheduleViewModel: ObservableObject {
     /// Calendar permission is requested lazily here, at the moment of export, rather
     /// than on app launch.
     public func exportToCalendar(_ event: EventItem) async -> CalendarExportResult {
-        guard event.schedulePrecision == .exactTime else {
-            return .notExactTime
+        guard canSave, storageIssue == nil else {
+            return .failed("Fix schedule storage before exporting so the Calendar link can be saved.")
         }
-
-        guard await ensureCalendarWriteAccess() else {
-            return .permissionDenied
+        guard let current = events.first(where: { $0.id == event.id }) else {
+            return .failed("This card is no longer in the plan.")
         }
+        guard current.schedulePrecision == .exactTime else { return .notExactTime }
+        guard !isExportingToCalendar else {
+            return .failed("Another Calendar export is in progress.")
+        }
+        isExportingToCalendar = true
+        defer { isExportingToCalendar = false }
 
         do {
+            let access = EKEventStore.authorizationStatus(for: .event)
+            if current.eventKitID != nil {
+                if access != .fullAccess {
+                    guard try await eventStore.requestFullAccessToEvents() else {
+                        return .failed("Full Calendar access is needed to update the previous export. Check Calendar access in Settings.")
+                    }
+                }
+            } else if access != .fullAccess && access != .writeOnly {
+                guard access == .notDetermined, try await eventStore.requestWriteOnlyAccessToEvents() else {
+                    return .permissionDenied
+                }
+            }
+
+            // Permission prompts can suspend this task while the plan changes.
+            guard let index = events.firstIndex(where: { $0.id == current.id }) else {
+                return .failed("This card was removed while Calendar access was being requested.")
+            }
+            let event = events[index]
+            guard event.schedulePrecision == .exactTime else { return .notExactTime }
+            guard storageIssue == nil else {
+                return .failed("The schedule could not be saved while Calendar access was being requested.")
+            }
             let ekEvent: EKEvent
 
             // If this in-app plan has already been exported, update that Apple
@@ -394,14 +516,16 @@ public final class ScheduleViewModel: ObservableObject {
             }
 
             ekEvent.title = event.title
+            ekEvent.timeZone = clock.zone
             ekEvent.startDate = event.startDate
             ekEvent.endDate = event.endDate
             ekEvent.notes = event.notes.isEmpty ? nil : event.notes
             ekEvent.location = event.locationName.isEmpty ? nil : event.locationName
             try eventStore.save(ekEvent, span: .thisEvent)
 
-            if let index = events.firstIndex(where: { $0.id == event.id }) {
-                events[index].eventKitID = ekEvent.eventIdentifier
+            events[index].eventKitID = ekEvent.eventIdentifier
+            if storageIssue != nil {
+                return .failed("The event was saved to Calendar, but its link could not be saved in Magnet Board.")
             }
             return .success
         } catch {
@@ -412,37 +536,41 @@ public final class ScheduleViewModel: ObservableObject {
 
     public func events(on date: Date) -> [EventItem] {
         events
-            .filter { Calendar.current.isDate($0.startDate, inSameDayAs: date) }
+            .filter { clock.calendar.isDate($0.startDate, inSameDayAs: date) }
             .sorted { $0.startDate < $1.startDate }
     }
 
     public func firstOpenSlot(on date: Date,
                               preferredHour: Int = 12,
-                              duration: TimeInterval = 60 * 60) -> Date {
-        var components = Calendar.current.dateComponents([.year, .month, .day], from: date)
-        components.hour = preferredHour
-        components.minute = 0
-        var candidate = Calendar.current.date(from: components) ?? date
+                              duration: TimeInterval = 60 * 60, excluding id: UUID? = nil) -> Date {
+        let calendar = clock.calendar
+        let preferred = dateAtHour(preferredHour, on: date)
+        guard calendar.isDate(preferred, inSameDayAs: date) else { return date }
+        var candidate = preferred
 
         // Use true interval overlap instead of comparing start times only.
         // This prevents failures such as placing a 13:00 item inside an existing
         // 12:00–15:00 block. Rough placements still have proxy times, so this also
         // keeps the day-part buckets from stacking cards directly on top of each other.
-        let dayEvents = events(on: date)
         let safeDuration = max(duration, 15 * 60)
-        var attempts = 0
-        while dayEvents.contains(where: { intervalsOverlap(candidate,
-                                                          candidate.addingTimeInterval(safeDuration),
-                                                          $0.startDate,
-                                                          $0.endDate) }) && attempts < 48 {
+        guard let day = calendar.dateInterval(of: .day, for: date) else { return preferred }
+        let dayEvents = eventsOverlapping(day).filter { $0.id != id }
+        while candidate < day.end {
+            let end = candidate.addingTimeInterval(safeDuration)
+            if end <= day.end, !dayEvents.contains(where: { intervalsOverlap(candidate, end, $0.startDate, $0.endDate) }) {
+                return candidate
+            }
             candidate = candidate.addingTimeInterval(30 * 60)
-            attempts += 1
         }
-        return candidate
+        // These are proxy times for rough cards. If the day is full, preserve
+        // the requested placement instead of silently moving the card to tomorrow.
+        return preferred
     }
 
     public func conflictWarnings(for date: Date) -> [String] {
-        let exactEvents = events(on: date).filter { $0.schedulePrecision == .exactTime }
+        guard let day = clock.calendar.dateInterval(of: .day, for: date) else { return [] }
+        let exactEvents = eventsOverlapping(day).filter { $0.schedulePrecision == .exactTime }
+            .sorted { $0.startDate < $1.startDate }
         guard exactEvents.count > 1 else { return [] }
         var warnings: [String] = []
 
@@ -462,6 +590,12 @@ public final class ScheduleViewModel: ObservableObject {
 
     private func intervalsOverlap(_ startA: Date, _ endA: Date, _ startB: Date, _ endB: Date) -> Bool {
         startA < endB && endA > startB
+    }
+
+    // Ownership (display, clear, reorder) stays on the start day. Occupancy
+    // extends across midnight, up to but excluding the actual end time.
+    private func eventsOverlapping(_ day: DateInterval) -> [EventItem] {
+        events.filter { intervalsOverlap($0.startDate, $0.endDate, day.start, day.end) }
     }
 
     public func precisionWarnings(for date: Date) -> [String] {
@@ -539,8 +673,8 @@ public final class ScheduleViewModel: ObservableObject {
         var warnings: [String] = []
         let exactEvents = dayEvents.filter { $0.schedulePrecision == .exactTime }
         for event in exactEvents {
-            let start = decimalHour(event.startDate)
-            let end = decimalHour(event.endDate)
+            let start = planningHour(event.startDate, relativeTo: date, calendar: clock.calendar)
+            let end = planningHour(event.endDate, relativeTo: date, calendar: clock.calendar)
             if start < startHour {
                 warnings.append("\(event.title) starts before your usual day start.")
             }
@@ -564,7 +698,7 @@ public final class ScheduleViewModel: ObservableObject {
         let title = planName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Magnet Board plan" : planName
         var lines: [String] = []
         lines.append(title)
-        lines.append(date.formatted(date: .abbreviated, time: .omitted))
+        lines.append("\(clock.date(date)) · \(clock.zone.identifier)")
         if !homeBaseName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append("Home base: \(homeBaseName)")
             if let homeStartTravelStatus {
@@ -593,10 +727,11 @@ public final class ScheduleViewModel: ObservableObject {
             }
         }
 
-        let knownTravel = travelLegStatuses.values.compactMap(\.seconds).reduce(0, +) + [homeStartTravelStatus, homeEndTravelStatus].compactMap { $0?.seconds }.reduce(0, +)
+        let internalLegs = dayEvents.dropLast().map { travelLegStatuses[$0.id] }
+        let knownTravel = TravelLegStatus.knownTotal(internalLegs + [homeStartTravelStatus, homeEndTravelStatus])
         let activity = dayEvents.reduce(0) { $0 + max(0, $1.endDate.timeIntervalSince($1.startDate)) }
         lines.append("")
-        lines.append("Summary: \(dayEvents.count) stop\(dayEvents.count == 1 ? "" : "s"), \(formatDuration(activity)) activity, \(knownTravel > 0 ? formatDuration(knownTravel) : "unknown") known travel.")
+        lines.append("Summary: \(dayEvents.count) stop\(dayEvents.count == 1 ? "" : "s"), \(formatDuration(activity)) activity, \(knownTravel.map(formatDuration) ?? "unknown") known travel.")
         lines.append("Made with Magnet Board")
         return lines.joined(separator: "\n")
     }
@@ -604,17 +739,12 @@ public final class ScheduleViewModel: ObservableObject {
     private func plainPlacementLabel(for event: EventItem) -> String {
         switch event.schedulePrecision {
         case .exactTime:
-            return "\(event.startDate.formatted(date: .omitted, time: .shortened))–\(event.endDate.formatted(date: .omitted, time: .shortened))"
+            return "\(clock.time(event.startDate))–\(clock.time(event.endDate))"
         case .dayPart:
             return event.dayPart.map { "\($0.label), rough" } ?? "part of day, rough"
         case .dayOnly:
             return "sometime today"
         }
-    }
-
-    private func decimalHour(_ date: Date) -> Double {
-        let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
-        return Double(comps.hour ?? 0) + Double(comps.minute ?? 0) / 60.0
     }
 
     private func formatDecimalHour(_ hour: Double) -> String {
@@ -631,24 +761,56 @@ public final class ScheduleViewModel: ObservableObject {
         return remainder == 0 ? "\(hours)h" : "\(hours)h \(remainder)m"
     }
 
+    /// One Maps request per leg. For driving and walking, the route already
+    /// contains its ETA. For transit, MapKit's ETA request is the supported path.
+    func travelEstimate(from: CLLocationCoordinate2D?, to: CLLocationCoordinate2D?,
+                        mode: TravelMode, departureDate: Date, arriveBy: Bool = false) async -> (TravelLegStatus, MKPolyline?) {
+        guard let request = Self.tripDirectionsRequest(from: from, to: to, mode: mode, date: departureDate, arriveBy: arriveBy) else {
+            return (.missingCoordinates, nil)
+        }
+        do {
+            if mode == .transit {
+                let seconds = try await transitETA(request)
+                return (.mapEstimate(seconds: seconds, mode: mode, note: mode.estimateNote), nil)
+            }
+            let response = try await MKDirections(request: request).calculate()
+            guard let route = response.routes.first else {
+                return (.failed(message: "No route was returned."), nil)
+            }
+            return (.mapEstimate(seconds: route.expectedTravelTime, mode: mode, note: mode.estimateNote), route.polyline)
+        } catch {
+            return (.failed(message: error.localizedDescription), nil)
+        }
+    }
+
+    private func makeDirections(from: CLLocationCoordinate2D?, to: CLLocationCoordinate2D?,
+                                mode: TravelMode, departureDate: Date?, arriveBy: Bool = false) -> MKDirections? {
+        guard let request = Self.tripDirectionsRequest(from: from, to: to, mode: mode, date: departureDate, arriveBy: arriveBy) else { return nil }
+        return MKDirections(request: request)
+    }
+
+    static func tripDirectionsRequest(from: CLLocationCoordinate2D?, to: CLLocationCoordinate2D?,
+                                      mode: TravelMode, date: Date?, arriveBy: Bool) -> MKDirections.Request? {
+        guard let from, let to, CLLocationCoordinate2DIsValid(from), CLLocationCoordinate2DIsValid(to) else { return nil }
+        let request = MKDirections.Request()
+        request.source = MKMapItem(placemark: MKPlacemark(coordinate: from))
+        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: to))
+        request.transportType = mode.mapKitTransportType
+        if arriveBy { request.arrivalDate = date } else { request.departureDate = date }
+        return request
+    }
 
     public func calculateTravelLegStatus(fromCoordinate: CLLocationCoordinate2D?,
                                          toCoordinate: CLLocationCoordinate2D?,
                                          travelMode: TravelMode = .driving,
                                          departureDate: Date? = nil,
                                          completion: @escaping (TravelLegStatus) -> Void) {
-        guard let fromLoc = fromCoordinate, let toLoc = toCoordinate else {
+        guard let directions = makeDirections(from: fromCoordinate, to: toCoordinate,
+                                              mode: travelMode, departureDate: departureDate) else {
             completion(.missingCoordinates)
             return
         }
 
-        let request = MKDirections.Request()
-        request.source = MKMapItem(placemark: MKPlacemark(coordinate: fromLoc))
-        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: toLoc))
-        request.transportType = travelMode.mapKitTransportType
-        if let departure = departureDate { request.departureDate = departure }
-
-        let directions = MKDirections(request: request)
         if travelMode == .transit {
             directions.calculateETA { response, error in
                 if let eta = response?.expectedTravelTime {
@@ -677,8 +839,8 @@ public final class ScheduleViewModel: ObservableObject {
                                           travelMode: TravelMode = .driving,
                                           departureDate: Date? = nil,
                                           completion: @escaping (TravelLegStatus) -> Void) {
-        if let manualSeconds = from.manualTravelToNextSeconds {
-            completion(.manualEstimate(seconds: manualSeconds, note: from.manualTravelToNextNote))
+        if let manual = from.manualTravel(to: to.id) {
+            completion(manual)
             return
         }
 
@@ -697,17 +859,12 @@ public final class ScheduleViewModel: ObservableObject {
                                travelMode: TravelMode = .driving,
                                departureDate: Date? = nil,
                                completion: @escaping (MKRoute?) -> Void) {
-        guard let fromLoc = fromCoordinate, let toLoc = toCoordinate else {
+        guard let directions = makeDirections(from: fromCoordinate, to: toCoordinate,
+                                              mode: travelMode, departureDate: departureDate) else {
             completion(nil)
             return
         }
-        let request = MKDirections.Request()
-        request.source = MKMapItem(placemark: MKPlacemark(coordinate: fromLoc))
-        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: toLoc))
-        request.transportType = travelMode.mapKitTransportType
-        if let departure = departureDate { request.departureDate = departure }
-
-        MKDirections(request: request).calculate { response, _ in
+        directions.calculate { response, _ in
             completion(response?.routes.first)
         }
     }
@@ -727,51 +884,54 @@ public final class ScheduleViewModel: ObservableObject {
     }
 
 
-    private func hasCalendarWriteAccess() -> Bool {
-        let status = EKEventStore.authorizationStatus(for: .event)
-        if #available(iOS 17.0, macOS 14.0, *) {
-            return status == .fullAccess || status == .writeOnly || status == .authorized
-        } else {
-            return status == .authorized
-        }
-    }
-
-    private func ensureCalendarWriteAccess() async -> Bool {
-        if hasCalendarWriteAccess() { return true }
-
-        let status = EKEventStore.authorizationStatus(for: .event)
-        guard status == .notDetermined else { return false }
-
-        do {
-            if #available(iOS 17.0, macOS 14.0, *) {
-                return try await eventStore.requestWriteOnlyAccessToEvents()
-            } else {
-                return try await eventStore.requestAccess(to: .event)
-            }
-        } catch {
-            print("Calendar access request failed: \(error)")
-            return false
-        }
-    }
-
     private func load() {
+        guard let saveURL else {
+            storageIssue = "The schedule storage folder is unavailable."
+            canSave = false
+            return
+        }
         isLoading = true
         defer { isLoading = false }
-        guard FileManager.default.fileExists(atPath: saveURL.path) else { return }
         do {
             let data = try Data(contentsOf: saveURL)
-            events = try JSONDecoder.dateDecoder.decode([EventItem].self, from: data)
+            let decoded = try JSONDecoder.dateDecoder.decode([EventItem].self, from: data)
+            events = bindingLegacyEstimates(in: decoded)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return
         } catch {
+            canSave = false
+            storageIssue = "The saved schedule could not be opened. The original file was kept. Schedule changes will not be saved."
             print("Failed to load scheduled events: \(error)")
         }
     }
 
+    private func bindingLegacyEstimates(in decoded: [EventItem]) -> [EventItem] {
+        guard decoded.contains(where: { $0.manualTravelToNextSeconds != nil && $0.manualTravelTarget == nil }) else {
+            return decoded
+        }
+        var migrated = decoded
+        let days = Dictionary(grouping: decoded.indices) { clock.calendar.startOfDay(for: decoded[$0].startDate) }
+        for indices in days.values {
+            let ordered = indices.sorted { decoded[$0].startDate < decoded[$1].startDate }
+            for (position, index) in ordered.enumerated() where decoded[index].manualTravelToNextSeconds != nil && decoded[index].manualTravelTarget == nil {
+                if ordered.indices.contains(position + 1) {
+                    migrated[index].manualTravelTarget = .placement(decoded[ordered[position + 1]].id)
+                } else {
+                    migrated[index].manualTravelTarget = .unassigned
+                }
+            }
+        }
+        return migrated
+    }
+
     private func save() {
-        guard !isLoading else { return }
+        guard !isLoading, canSave, let saveURL else { return }
         do {
             let data = try JSONEncoder.prettyDateEncoder.encode(events)
             try data.write(to: saveURL, options: [.atomic])
+            if storageIssue != nil { storageIssue = nil }
         } catch {
+            storageIssue = "The schedule could not be saved. Changes are only available for this session."
             print("Failed to save scheduled events: \(error)")
         }
     }

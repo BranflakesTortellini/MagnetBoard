@@ -16,6 +16,8 @@ struct AddIdeaView: View {
     @State private var latitude = ""
     @State private var longitude = ""
     @State private var selectedCoordinate: CLLocationCoordinate2D?
+    @State private var selectedCountry: String?
+    @State private var selectedZoneID: String?
     @State private var showingLocationSearch = false
     @State private var notes = ""
     @State private var tags = ""
@@ -25,14 +27,29 @@ struct AddIdeaView: View {
     @State private var commitment: CardCommitment = .loose
     @State private var group: BoardGroup = .ideas
     @State private var priority = 2
+    @FocusState private var titleFocused: Bool
+
+    private var canAdd: Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (!includeCost || enteredCost != nil)
+    }
+
+    private var enteredCost: Double? {
+        guard let amount = Double(cost.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")), amount.isFinite else { return nil }
+        return amount
+    }
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    TextField("Title, e.g. Saturday market", text: $title)
+                        .focused($titleFocused)
+                        .submitLabel(.done)
+                        .onSubmit { addCard() }
+                        .accessibilityIdentifier("newIdea.title")
+                }
                 Section("Quick start") {
-                    Text("Tap one of these, or write your own card below.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                         TemplateButton(title: "Coffee stop", systemImage: "cup.and.saucer") { applyTemplate(title: "Coffee stop", category: .snackCoffee, repeatable: true, durationMinutes: 30, group: .ideas) }
                         TemplateButton(title: "Fun dinner", systemImage: "fork.knife") { applyTemplate(title: "Fun dinner", category: .fullMeal, repeatable: false, durationMinutes: 90, group: .maybe) }
@@ -51,7 +68,6 @@ struct AddIdeaView: View {
                 }
 
                 Section("Card basics") {
-                    TextField("Title, e.g. Saturday market", text: $title)
                     Picker("How real is this?", selection: $commitment) {
                         Text(CardCommitment.loose.label).tag(CardCommitment.loose)
                         Text(CardCommitment.detailed.label).tag(CardCommitment.detailed)
@@ -64,7 +80,13 @@ struct AddIdeaView: View {
                             Text(group.title).tag(group)
                         }
                     }
-                    Picker("Category", selection: $category) {
+                    Picker("Category", selection: Binding(
+                        get: { category },
+                        set: { newCategory in
+                            category = newCategory
+                            allowsMultipleScheduledInstances = newCategory.isRepeatFriendlyByDefault
+                        }
+                    )) {
                         ForEach(ActivityCategory.allCases) { category in
                             Label(category.label, systemImage: category.systemImage).tag(category)
                         }
@@ -81,6 +103,7 @@ struct AddIdeaView: View {
                 }
 
                 Section("Optional details") {
+                    IndoorTagToggle(tags: $tags)
                     Toggle("Include duration", isOn: $includeDuration)
                     if includeDuration {
                         Stepper(value: $durationMinutes, in: 15...480, step: 15) {
@@ -95,7 +118,17 @@ struct AddIdeaView: View {
                     }
 
                     HStack {
-                        TextField("Location or neighborhood", text: $locationName)
+                        TextField("Location or neighborhood", text: Binding(
+                            get: { locationName },
+                            set: { name in
+                                locationName = name
+                                if selectedCoordinate != nil {
+                                    selectedCoordinate = nil
+                                    latitude = ""
+                                    longitude = ""
+                                }
+                            }
+                        ))
                         Button("Search") { showingLocationSearch = true }
                     }
                     if selectedCoordinate != nil {
@@ -109,9 +142,15 @@ struct AddIdeaView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack {
-                            TextField("Latitude", text: $latitude)
+                            TextField("Latitude", text: Binding(
+                                get: { latitude },
+                                set: { latitude = $0; selectedCoordinate = nil }
+                            ))
                                 .keyboardType(.numbersAndPunctuation)
-                            TextField("Longitude", text: $longitude)
+                            TextField("Longitude", text: Binding(
+                                get: { longitude },
+                                set: { longitude = $0; selectedCoordinate = nil }
+                            ))
                                 .keyboardType(.numbersAndPunctuation)
                         }
                     }
@@ -128,19 +167,19 @@ struct AddIdeaView: View {
                 }
             }
             .navigationTitle("New idea")
+            .onAppear { titleFocused = true }
             .sheet(isPresented: $showingLocationSearch) {
                 LocationSearchSheet(initialQuery: locationName) { result in
                     locationName = result.name
                     latitude = String(format: "%.6f", result.coordinate.latitude)
                     longitude = String(format: "%.6f", result.coordinate.longitude)
                     selectedCoordinate = result.coordinate.clLocationCoordinate2D
+                    selectedCountry = result.coordinate.countryCode
+                    selectedZoneID = result.coordinate.timeZoneID
                     showingLocationSearch = false
                 } onCancel: {
                     showingLocationSearch = false
                 }
-            }
-            .onChange(of: category) { newCategory in
-                allowsMultipleScheduledInstances = newCategory.isRepeatFriendlyByDefault
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -148,7 +187,8 @@ struct AddIdeaView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") { addCard() }
-                        .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("newIdea.save")
+                        .disabled(!canAdd)
                 }
             }
         }
@@ -168,16 +208,18 @@ struct AddIdeaView: View {
         self.durationMinutes = durationMinutes
         self.group = group
         self.priority = priority
-        if !tags.isEmpty { self.tags = tags }
+        self.tags = tags
         Haptics.lightImpact()
     }
 
     private func addCard() {
+        guard isPresented, canAdd else { return }
         let coordinate: CLLocationCoordinate2D?
         if let selectedCoordinate {
             coordinate = selectedCoordinate
         } else if let lat = Double(latitude), let lon = Double(longitude) {
-            coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            let candidate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            coordinate = CLLocationCoordinate2DIsValid(candidate) ? candidate : nil
         } else {
             coordinate = nil
         }
@@ -186,7 +228,7 @@ struct AddIdeaView: View {
         boardViewModel.addIdea(
             title: title,
             duration: includeDuration ? durationMinutes * 60 : nil,
-            cost: includeCost ? Double(cost.replacingOccurrences(of: ",", with: ".")) : nil,
+            cost: includeCost ? enteredCost : nil,
             locationName: locationName,
             coordinate: coordinate,
             notes: notes,
@@ -196,7 +238,8 @@ struct AddIdeaView: View {
             allowsMultipleScheduledInstances: allowsMultipleScheduledInstances,
             commitment: commitment,
             group: group,
-            priority: priority
+            priority: priority, countryCode: selectedCoordinate == nil ? nil : selectedCountry,
+            timeZoneID: selectedCoordinate == nil ? nil : selectedZoneID
         )
         isPresented = false
     }
@@ -233,14 +276,33 @@ struct IdeaDetailView: View {
     @EnvironmentObject var scheduleViewModel: ScheduleViewModel
     @EnvironmentObject var undoViewModel: DelightUndoViewModel
     @Environment(\.dismiss) private var dismiss
-    @State var idea: IdeaItem
+    @State private var idea: IdeaItem
+    @State private var tagsText: String
+    @State private var peopleText: String
     @State private var showingLocationSearch = false
+
+    init(idea: IdeaItem) {
+        _idea = State(initialValue: idea)
+        _tagsText = State(initialValue: idea.tags.joined(separator: ", "))
+        _peopleText = State(initialValue: idea.people.joined(separator: ", "))
+    }
+
+    // Keep the user's delimiters while typing. Normalizing the field on every
+    // keystroke removes the trailing comma before a second entry can be typed.
+    private var editedIdea: IdeaItem {
+        var draft = idea
+        draft.title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.tags = splitCSV(tagsText)
+        draft.people = splitCSV(peopleText)
+        return draft
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Card") {
                     TextField("Title", text: $idea.title)
+                        .accessibilityIdentifier("cardDetails.title")
                     if idea.commitment == .scheduled || idea.commitment == .locked {
                         LabeledContent("State", value: idea.commitment.label)
                         Text("Scheduled and locked states are controlled from the Plan view so a card cannot claim to be scheduled without an actual scheduled placement.")
@@ -267,16 +329,24 @@ struct IdeaDetailView: View {
                 }
 
                 Section("Details") {
+                    IndoorTagToggle(tags: $tagsText)
                     OptionalDurationEditor(duration: $idea.duration)
                     OptionalCostEditor(cost: $idea.cost)
                     HStack {
-                        TextField("Location or neighborhood", text: $idea.locationName)
+                        TextField("Location or neighborhood", text: Binding(
+                            get: { idea.locationName },
+                            set: { name in
+                                idea.locationName = name
+                                idea.coordinate = nil
+                            }
+                        ))
                         Button("Search") { showingLocationSearch = true }
                     }
                     if let coordinate = idea.coordinate {
                         Label(String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude), systemImage: "location.fill")
                             .font(.caption)
                             .foregroundStyle(.green)
+                        Button("Remove exact location") { idea.coordinate = nil }
                     } else {
                         Text("No exact coordinate yet. Maps ETA needs coordinates, but manual travel estimates still work.")
                             .font(.caption)
@@ -284,23 +354,23 @@ struct IdeaDetailView: View {
                     }
                     TextField("Notes", text: $idea.notes, axis: .vertical)
                         .lineLimit(3...8)
-                    TextField("Tags", text: Binding(
-                        get: { idea.tags.joined(separator: ", ") },
-                        set: { idea.tags = splitCSV($0) }
-                    ))
-                    TextField("People", text: Binding(
-                        get: { idea.people.joined(separator: ", ") },
-                        set: { idea.people = splitCSV($0) }
-                    ))
+                    TextField("Tags", text: $tagsText)
+                    TextField("People", text: $peopleText)
                 }
 
                 Section("Planning readiness") {
-                    if idea.missingInfoHints.isEmpty {
+                    let missing = editedIdea.missingInfoHints
+                    if missing.isEmpty {
                         Label("Enough information for stronger planning help.", systemImage: "checkmark.circle")
                             .foregroundStyle(.green)
                     } else {
-                        Text("Missing: \(idea.missingInfoHints.joined(separator: ", "))")
+                        Text("Missing: \(missing.joined(separator: ", "))")
                             .foregroundStyle(.orange)
+                    }
+                }
+                Section {
+                    Button(role: .destructive, action: deleteCardWithUndo) {
+                        Label("Delete card", systemImage: "trash")
                     }
                 }
             }
@@ -316,22 +386,24 @@ struct IdeaDetailView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Delete", role: .destructive) {
-                        deleteCardWithUndo()
-                    }
+                    Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        boardViewModel.updateIdea(idea)
+                        boardViewModel.updateIdea(editedIdea)
                         dismiss()
                     }
+                    .disabled(idea.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
     }
 
     private func deleteCardWithUndo() {
-        let removedIdea = idea
+        guard let removedIdea = boardViewModel.ideas.first(where: { $0.id == idea.id }) else {
+            dismiss()
+            return
+        }
         let removedEvents = scheduleViewModel.deleteEvents(forIdeaID: idea.id)
         boardViewModel.removeIdea(idea)
         Haptics.warning()
@@ -346,6 +418,20 @@ struct IdeaDetailView: View {
         dismiss()
     }
 
+}
+
+private struct IndoorTagToggle: View {
+    @Binding var tags: String
+
+    var body: some View {
+        Toggle("Indoors", isOn: Binding(get: {
+            splitCSV(tags).contains(where: IdeaItem.isIndoorTag)
+        }, set: { enabled in
+            var values = splitCSV(tags).filter { !IdeaItem.isIndoorTag($0) }
+            if enabled { values.append("indoors") }
+            tags = values.joined(separator: ", ")
+        }))
+    }
 }
 
 struct OptionalDurationEditor: View {

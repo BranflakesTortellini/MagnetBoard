@@ -70,6 +70,6 @@ struct HelpStepCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(SystemPalette.secondaryGroupedBackground))
     }
 }

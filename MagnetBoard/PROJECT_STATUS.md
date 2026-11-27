@@ -61,6 +61,7 @@ The app should feel like moving little magnets or sticky notes, not like filling
 ## Honest limitations
 
 - This code has not been compiled in Xcode in this environment. SwiftUI/MapKit/EventKit must still be checked on a Mac/iPhone.
+- The active Xcode project points at the `MagnetBoard/` folder. The older `MagnetBoardApp/` folder is a source checkpoint copy and is not the current Xcode target.
 - Home-base travel works from stored coordinates, and Settings now has soft day start/end preferences, but there is not yet a dedicated “leave home at exactly X” workflow.
 - Make it flow is still conservative. It is not full route optimization and does not call MapKit for every permutation.
 - Drag-to-reorder and drag-on-board feel need real device testing.
@@ -121,3 +122,50 @@ Completed in this checkpoint:
 - Added `PRE_TEST_BACKLOG.md` for likely post-device-test refinements.
 
 Honest note: this step intentionally avoided deeper feature risk. The app is now at a good point for a first device/simulator test once the Apple build environment is available.
+
+## Xcode compile-readiness pass
+
+Completed locally:
+- Patched the actual Xcode target sources under `MagnetBoard/`, not the older `MagnetBoardApp/` checkpoint folder.
+- Added explicit Combine imports for the view models and kept Combine's default publisher for `@Published` state.
+- Replaced ambiguous `Color(.system...)` usage with centralized `SystemPalette` helpers.
+- Changed toolbar placements from `.topBar...` to `.navigationBar...` for broader iOS compatibility.
+- Constrained the Xcode target to iPhone/iPad platforms and set the iOS deployment target to 17.0.
+- Connected the Calendar usage strings and drag payload declarations through the target's Info.plist.
+
+A follow-up runtime audit protected unreadable saves, corrected drag reordering and must-do placement, and guarded stale Maps results. On first export, Calendar requests write-only access. Updating an existing export requests full access when needed to look up the saved event.
+
+The next review fixed rough cards crossing locked rows at tied times, multi-entry tag and people editing, and overnight occupancy and return-home timing. Manual travel estimates now follow a specific pair of stops. Older saves associate estimates with the next stop in the originally saved day; an estimate from a former last stop is not applied to a newly added destination. A known zero-minute trip stays distinct from an unknown trip.
+
+From Windows, once the workflow is on the default branch, open **Actions > iOS Build > Run workflow**. It also runs on pull requests and on pushes to main. The job only starts for a public repository on github.com. Private, internal, or unknown visibility skips the whole job before allocating a Mac. It uses a standard hosted runner without paid larger runners, uploaded artifacts, or caches.
+
+The everyday iPhone suite covers eight journeys: create, drag, schedule and relaunch; tap to schedule a repeatable card; first-run help and canceling a draft; prevent a duplicate evening card; pick a card by name and undo; cancel a board edit; move a morning placement to tomorrow afternoon; and find, rename and reopen one of 30 overlapping cards. An independent iPhone SE suite checks accessibility-size type, the software keyboard, and Undo. Both jobs require their full test counts with no skips. The separate macOS checks exercise the production planner models. These tests do not exercise live Maps requests or Calendar permissions.
+
+The change-of-plans iPhone suite builds a seven-day Hamburg itinerary on an isolated simulator board. It cancels an unpinned outdoor stop, moves a visitor outing later, replaces a closed market with a previously saved nearby indoor idea, uses Undo, and checks each day after relaunch. A second journey opens a German Unity Day itinerary, selects transit, checks a manual estimate, searches local shopping advice and changes days. The model scenario separately protects fixed bookings, excludes overlong and already-booked alternatives, and checks persisted placement identities. None of the fictional stops, closures or weather are bundled as starter ideas.
+
+**Plan B:** An unlocked, unexported rough stop can be skipped without deleting its idea, or replaced with a saved idea within 2 km of its pin. Distances are straight-line, not walking estimates. Known durations must fit the stop; unknown durations keep its rough slot. The Indoors filter uses explicit indoor/indoors tags, including the toggle in the card editor. A rainy-day tag alone does not imply a place is indoors. A Maps preview does not replace the stop.
+
+**Travel:** Update travel requests estimates for the selected day and mode, using each preceding stop's end time. An optional home-to-first-stop leg uses the arrival time instead. Rough stops have approximate departure times. A manual estimate takes precedence and works offline. Transit line names, stops and transfers are available in Apple Maps where supported; set Leave At there to match the planned time. No background tracking or location permission is required.
+
+**Destination time:** Tap the clock next to the Plan date and choose a time zone. Search for Hamburg or Berlin, or use a zone suggested by a saved place. The entire plan uses this clock for dates, exact times, day boundaries, travel, holidays, sharing and Calendar export. The first launch anchors the phone's current zone until changed. Manually choosing a different zone displays existing bookings in that zone; it never changes their saved instants. Trips spanning multiple zones currently have one display zone, not a separate clock per stop.
+
+The destination-clock iPhone journey schedules a one-hour museum visit for 14:00 in Hamburg from Los Angeles. It relaunches with the phone zone set to Berlin and verifies the same visit and 15:23 arrival. A simulator-only test double supplies a 23-minute transit estimate only if the real MapKit request contains the museum and cafe pins and exactly 13:00 UTC (15:00 Hamburg, summer). This tests the request and the user's itinerary, not live transit service. Model checks also cover winter, mismatched daylight-saving dates and local midnight.
+
+**Local guide:** Saved place countries determine which holiday notices to show. Pick a trip destination if there are no country-tagged pins, or select a German or UK region for its regional calendar. Opening tips are searchable across destinations and link to official sources; neither tips nor calendar dates promise a particular venue will be open or closed. Regenerate the bundled 2025–2030 snapshot and its third-party license with `uv run --isolated --no-project --with holidays==0.109 --python 3.12 python Tools/generate_holidays.py`. Review coverage and official guidance before shipping a new edition.
+
+## Next user acceptance checks
+
+| Priority | Try it as a planner | What must hold |
+| --- | --- | --- |
+| 1 | Scroll past an overlapping card, lift it, change your mind, and try again on a small iPhone. | Scrolling and canceling never move a card; the intended card moves exactly once on a completed drag. |
+| 2 | Delete a single placement, then clear a whole day and use the visible Undo button each time. | The original order, time buckets and travel notes return; tomorrow's plan is untouched. |
+| 3 | Schedule one reservation twice, then schedule two coffee breaks from a repeatable card. | No duplicate reservation; both coffee breaks remain individually editable. |
+| 4 | Lock an appointment, use Make it flow around it, then edit an overnight event. | No locked time moves; adjacent days show the right conflicts and free slots. |
+| 5 | Decline Calendar permission, allow it later, export, edit and export again. | The in-app plan always survives and the second export updates the original calendar event. |
+| 6 | Change dates while Maps is loading, then go offline and enter a manual estimate. | No stale route appears; the estimate stays with its two stops after reordering and relaunch. |
+| 7 | Repeat adding and scheduling with large text, Reduce Motion and VoiceOver on a real phone. | Buttons and destinations remain reachable and understandable without relying on precise dragging. |
+
+Still needs a real Apple toolchain:
+- Open `MagnetBoard.xcodeproj`.
+- Select an iPhone simulator first, not macOS or visionOS.
+- Build once, then fix any remaining SDK-specific errors one at a time.

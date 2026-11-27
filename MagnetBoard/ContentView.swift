@@ -12,7 +12,15 @@ public struct ContentView: View {
     @AppStorage("welcome.hasSeenMagnetBoardIntro") private var hasSeenIntro = false
     @AppStorage(PlanningSettingsKeys.planName) private var planName = ""
 
-    public init() {}
+    public init() {
+        #if DEBUG && targetEnvironment(simulator)
+        let env = ProcessInfo.processInfo.environment
+        if UUID(uuidString: env["MAGNETBOARD_TEST_BOARD"] ?? "") != nil,
+           let stamp = env["MAGNETBOARD_TEST_DAY"], let day = ISO8601DateFormatter().date(from: stamp) {
+            _selectedDate = State(initialValue: day)
+        }
+        #endif
+    }
 
     public var body: some View {
         TabView {
@@ -25,6 +33,8 @@ public struct ContentView: View {
 
             NavigationStack {
                 SchedulePlannerView(selectedDate: $selectedDate)
+                    .environment(\.calendar, scheduleViewModel.clock.calendar)
+                    .environment(\.timeZone, scheduleViewModel.clock.zone)
                     .navigationTitle("Plan")
                     .toolbar { helpToolbar }
             }
@@ -46,21 +56,30 @@ public struct ContentView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            UndoBannerView()
-                .environmentObject(undoViewModel)
+            VStack(spacing: 0) {
+                ForEach([boardViewModel.storageIssue, scheduleViewModel.storageIssue].compactMap { $0 }, id: \.self) { issue in
+                    Label(issue, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(.regularMaterial)
+                }
+                UndoBannerView()
+                    .environmentObject(undoViewModel)
+            }
         }
     }
 
     @ToolbarContentBuilder
     private var helpToolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
+        ToolbarItem(placement: .navigationBarLeading) {
             Button {
                 showingHelp = true
             } label: {
                 Label("Help", systemImage: "questionmark.circle")
             }
         }
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItem(placement: .navigationBarTrailing) {
             Button {
                 showingSettings = true
             } label: {

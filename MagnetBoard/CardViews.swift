@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 // MARK: - Shared Card UI
 
@@ -10,23 +11,10 @@ struct MagnetCardView: View {
     let mode: MagnetCardMode
 
     var body: some View {
-        visibleCard
+        cardBody
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabelText)
             .accessibilityHint(accessibilityHintText)
-    }
-
-    @ViewBuilder private var visibleCard: some View {
-        if mode == .board {
-            cardBody
-        } else {
-            cardBody
-                .onDrag {
-                    NSItemProvider(object: idea.id.uuidString as NSString)
-                } preview: {
-                    MagnetCardView(idea: idea, mode: .dragPreview)
-                }
-        }
     }
 
     private var cardBody: some View {
@@ -81,7 +69,7 @@ struct MagnetCardView: View {
         case .board:
             return "Tap to edit. Touch and hold, then drag to move this sticky note."
         case .compact:
-            return "Drag into a day part to plan it."
+            return "Hold and drag into a day part, or tap to select and then tap a basket."
         case .dragPreview:
             return "Dragging card."
         }
@@ -91,7 +79,7 @@ struct MagnetCardView: View {
         RoundedRectangle(cornerRadius: 20)
             .fill(
                 LinearGradient(
-                    colors: [idea.category.cuteWash, Color(.systemBackground)],
+                    colors: [idea.category.cuteWash, SystemPalette.systemBackground],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -174,7 +162,7 @@ struct MagnetCardView: View {
         }
     }
 
-    private var accessibilityLabelText: String {
+    var accessibilityLabelText: String {
         var parts = [idea.title, idea.commitment.label]
         if idea.category != .unspecified { parts.append(idea.category.label) }
         if let duration = idea.duration { parts.append(formatDuration(duration)) }
@@ -190,6 +178,76 @@ struct MagnetCardView: View {
         if idea.category != .unspecified { bits.append(idea.category.label) }
         if let firstTag = idea.tags.first { bits.append("#\(firstTag)") }
         return bits
+    }
+}
+
+/// A native button lets the enclosing scroll views handle immediate swipes.
+/// Only a stationary hold starts a drag; a normal tap selects or opens the card.
+struct MagnetCardControl: UIViewRepresentable {
+    enum Surface {
+        case tray
+        case board(BoardGroup)
+    }
+    let label: String
+    let id: UUID
+    let selected: Bool
+    var surface: Surface = .tray
+    let tap: () -> Void
+    let moved: (CGPoint?) -> Void
+    let released: (CGPoint) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .custom)
+        button.isAccessibilityElement = true
+        button.addTarget(context.coordinator, action: #selector(Coordinator.tapCard), for: .touchUpInside)
+        let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.hold(_:)))
+        hold.minimumPressDuration = 0.35
+        button.addGestureRecognizer(hold)
+        return button
+    }
+
+    func updateUIView(_ button: UIButton, context: Context) {
+        context.coordinator.control = self
+        button.accessibilityLabel = label
+        switch surface {
+        case .tray:
+            button.accessibilityIdentifier = "tray.card.\(id.uuidString)"
+            button.accessibilityHint = "Tap to select, then tap a basket. Or hold and drag to a basket."
+            button.accessibilityValue = nil
+        case .board(let group):
+            button.accessibilityIdentifier = "board.card.\(id.uuidString)"
+            button.accessibilityHint = "Tap to edit. Hold and drag to move this card."
+            button.accessibilityValue = group.title
+        }
+        button.accessibilityTraits = selected ? [.button, .selected] : [.button]
+    }
+
+    @MainActor final class Coordinator: NSObject {
+        var control: MagnetCardControl
+        private var start: CGPoint?
+        init(_ control: MagnetCardControl) { self.control = control }
+        @objc func tapCard() { control.tap() }
+        @objc func hold(_ gesture: UILongPressGestureRecognizer) {
+            let point: CGPoint
+            switch control.surface {
+            case .tray:
+                point = gesture.location(in: gesture.view)
+            case .board:
+                // The note follows the finger, so measure movement in the stationary window.
+                let location = gesture.location(in: gesture.view?.window)
+                if gesture.state == .began { start = location }
+                let origin = start ?? location
+                point = CGPoint(x: location.x - origin.x, y: location.y - origin.y)
+            }
+            switch gesture.state {
+            case .began, .changed: control.moved(point)
+            case .ended: start = nil; control.released(point)
+            case .cancelled, .failed: start = nil; control.moved(nil)
+            default: break
+            }
+        }
     }
 }
 

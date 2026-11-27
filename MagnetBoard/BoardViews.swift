@@ -7,12 +7,21 @@ struct FreeBoardView: View {
     @EnvironmentObject var boardViewModel: BoardViewModel
     @Binding var showingAddIdea: Bool
     @State private var selectedIdea: IdeaItem?
-    @State private var dragStartPositions: [UUID: CGPoint] = [:]
-    @State private var liftedIdeaID: UUID?
+    @State private var boardDrag: BoardDrag?
     @State private var boardNotice: String?
     @AppStorage(PlanningSettingsKeys.reduceMotion) private var reduceMotion = false
 
-    private let canvasSize = CGSize(width: 960, height: 1500)
+    private struct BoardDrag {
+        let ideaID: UUID
+        let position: CGPoint
+    }
+
+    private var liftedIdeaID: UUID? { boardDrag?.ideaID }
+
+    private var canvasSize: CGSize {
+        let lowestCard = boardViewModel.ideas.map(\.boardY).max() ?? 0
+        return CGSize(width: 960, height: max(1500, lowestCard + 140))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,38 +50,53 @@ struct FreeBoardView: View {
                     BoardBackground(size: canvasSize)
 
                     ForEach(boardViewModel.ideas) { idea in
-                        MagnetCardView(idea: idea, mode: .board)
-                            .position(x: idea.boardX, y: idea.boardY)
+                        let card = MagnetCardView(idea: idea, mode: .board)
+                        card
+                            .accessibilityHidden(true)
+                            .overlay {
+                                GeometryReader { proxy in
+                                    MagnetCardControl(label: card.accessibilityLabelText, id: idea.id,
+                                                      selected: false, surface: .board(idea.group)) {
+                                        selectedIdea = idea
+                                    } moved: { delta in
+                                        boardDrag = delta.map { BoardDrag(ideaID: idea.id, position: boardDropPosition(idea, delta: $0)) }
+                                    } released: { delta in
+                                        boardDrag = nil
+                                        guard delta != .zero else { return }
+                                        let position = boardDropPosition(idea, delta: delta)
+                                        boardViewModel.moveIdea(idea.id, x: position.x, y: position.y, group: groupForBoardPosition(position))
+                                        Haptics.success()
+                                    }
+                                    .frame(width: proxy.size.width, height: proxy.size.height)
+                                }
+                            }
+                            .position(boardPosition(for: idea))
                             .scaleEffect(!reduceMotion && liftedIdeaID == idea.id ? 1.05 : 1.0)
                             .shadow(color: Color.black.opacity(liftedIdeaID == idea.id ? 0.24 : 0.10), radius: liftedIdeaID == idea.id ? 18 : 4, x: 0, y: liftedIdeaID == idea.id ? 14 : 3)
                             .rotationEffect(!reduceMotion && liftedIdeaID == idea.id ? .degrees(-1.2) : .degrees(0))
                             .zIndex(liftedIdeaID == idea.id ? 10 : 0)
                             .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.78), value: liftedIdeaID)
-                            .gesture(boardMoveGesture(for: idea))
-                            .onTapGesture {
-                                selectedIdea = idea
-                            }
                     }
                 }
                 .frame(width: canvasSize.width, height: canvasSize.height)
             }
+            .accessibilityIdentifier("board.canvas")
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    boardViewModel.tidyBoardByPlanningState()
-                } label: {
-                    Label("Tidy", systemImage: "wand.and.stars")
-                }
-                Button {
-                    showingAddIdea = true
-                } label: {
-                    Label("Add", systemImage: "plus")
-                }
-            }
+        .onChange(of: liftedIdeaID) { _, lifted in
+            if lifted != nil { Haptics.lightImpact() }
         }
         .sheet(item: $selectedIdea) { idea in
             IdeaDetailView(idea: idea)
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    BoardCardFinder()
+                } label: {
+                    Label("Find a card", systemImage: "magnifyingglass")
+                }
+                .accessibilityIdentifier("board.find")
+            }
         }
         .alert("Board", isPresented: Binding(
             get: { boardNotice != nil },
@@ -84,62 +108,16 @@ struct FreeBoardView: View {
         }
     }
 
-    /// iPhone-friendly board movement: tap edits; touch-and-hold lifts the
-    /// sticky note; then dragging moves it. This avoids most accidental moves
-    /// while scrolling the two-axis board.
-    private func boardMoveGesture(for idea: IdeaItem) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.16)
-            .sequenced(before: DragGesture(minimumDistance: 0))
-            .onChanged { value in
-                switch value {
-                case .first(true):
-                    beginMoving(idea)
-                case .second(true, let drag?):
-                    beginMoving(idea)
-                    move(idea, translation: drag.translation)
-                default:
-                    break
-                }
-            }
-            .onEnded { value in
-                switch value {
-                case .second(true, let drag?):
-                    finishMoving(idea, translation: drag.translation)
-                default:
-                    dragStartPositions[idea.id] = nil
-                    liftedIdeaID = nil
-                }
-            }
+    private func boardPosition(for idea: IdeaItem) -> CGPoint {
+        if let boardDrag, boardDrag.ideaID == idea.id { return boardDrag.position }
+        return CGPoint(x: idea.boardX, y: idea.boardY)
     }
 
-    private func beginMoving(_ idea: IdeaItem) {
-        if liftedIdeaID != idea.id { Haptics.lightImpact() }
-        liftedIdeaID = idea.id
-        if dragStartPositions[idea.id] == nil {
-            dragStartPositions[idea.id] = CGPoint(x: idea.boardX, y: idea.boardY)
-        }
-    }
-
-    private func move(_ idea: IdeaItem, translation: CGSize) {
-        let start = dragStartPositions[idea.id] ?? CGPoint(x: idea.boardX, y: idea.boardY)
-        boardViewModel.updatePosition(
-            for: idea.id,
-            x: start.x + translation.width,
-            y: start.y + translation.height
+    private func boardDropPosition(_ idea: IdeaItem, delta: CGPoint) -> CGPoint {
+        CGPoint(
+            x: max(70, min(900, CGFloat(idea.boardX) + delta.x)),
+            y: max(70, min(canvasSize.height - 100, CGFloat(idea.boardY) + delta.y))
         )
-    }
-
-    private func finishMoving(_ idea: IdeaItem, translation: CGSize) {
-        let start = dragStartPositions[idea.id] ?? CGPoint(x: idea.boardX, y: idea.boardY)
-        let finalPosition = CGPoint(
-            x: start.x + translation.width,
-            y: start.y + translation.height
-        )
-        boardViewModel.updatePosition(for: idea.id, x: finalPosition.x, y: finalPosition.y)
-        boardViewModel.updateGroup(for: idea.id, group: groupForBoardPosition(finalPosition))
-        Haptics.success()
-        dragStartPositions[idea.id] = nil
-        liftedIdeaID = nil
     }
 
     /// Converts a physical board drop position into a soft board group.
@@ -151,6 +129,57 @@ struct FreeBoardView: View {
         if point.x < 510 { return .ideas }
         if point.x < 750 { return .maybe }
         return .needsInfo
+    }
+}
+
+private struct BoardCardFinder: View {
+    @EnvironmentObject private var board: BoardViewModel
+    @State private var query = ""
+    @State private var editing: IdeaItem?
+    @FocusState private var typing: Bool
+
+    private var results: [IdeaItem] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return board.ideas.filter { idea in
+            term.isEmpty || ([idea.title, idea.locationName] + idea.tags).contains { $0.localizedStandardContains(term) }
+        }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TextField("Title, place, or tag", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .focused($typing)
+                .accessibilityIdentifier("board.find.query")
+                .padding()
+            List {
+                Section {
+                    ForEach(results) { idea in
+                        Button {
+                            typing = false
+                            editing = idea
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text(idea.title)
+                                Text(idea.locationName.isEmpty ? idea.group.title : idea.locationName)
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .accessibilityIdentifier("board.result.\(idea.id)")
+                    }
+                } header: {
+                    Text("\(results.count) cards").accessibilityIdentifier("board.find.count")
+                }
+            }
+            .overlay {
+                if results.isEmpty { ContentUnavailableView.search(text: query) }
+            }
+        }
+        .navigationTitle("Find a card")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { typing = true }
+        .sheet(item: $editing) { IdeaDetailView(idea: $0) }
     }
 }
 
@@ -220,6 +249,7 @@ struct BoardQuickActions: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .accessibilityIdentifier("board.newIdea")
 
             Button {
                 Haptics.success()

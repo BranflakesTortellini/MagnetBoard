@@ -1,0 +1,114 @@
+name: iOS Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: iPhone tests - ${{ matrix.profile }} (public repos only)
+    # Fail closed before allocating a runner, including for unknown visibility.
+    if: github.server_url == 'https://github.com' && github.event.repository.visibility == 'public'
+    # Standard public Intel runner; the arm64 queue can expire before a Mac is assigned.
+    runs-on: macos-15-intel
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [everyday, compact-large-text, change-of-plans]
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: List project schemes
+        run: xcodebuild -project MagnetBoard.xcodeproj -list
+
+      - name: Select an installed iPhone simulator
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          set -eo pipefail
+          sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          if [[ "$PROFILE" == "compact-large-text" ]]; then
+            defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+            runtime=$(xcrun simctl list devices available --json | python3 .github/scripts/select_iphone.py "$sdk" --runtime)
+            iphone=$(xcrun simctl create "MagnetBoard SE" com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation "$runtime")
+            xcrun simctl bootstatus "$iphone" -b
+            xcrun simctl ui "$iphone" content_size accessibility-large
+            echo "Testing iPhone SE (3rd generation), $runtime, accessibility-large"
+            echo "UI_SUITE=CompactPhoneTests" >> "$GITHUB_ENV"
+            echo "EXPECTED_TESTS=1" >> "$GITHUB_ENV"
+          else
+            iphone=$(xcrun simctl list devices available --json | python3 .github/scripts/select_iphone.py "$sdk")
+            # Wait for SpringBoard and system services before XCTest attaches.
+            xcrun simctl bootstatus "$iphone" -b
+            if [[ "$PROFILE" == "change-of-plans" ]]; then
+              echo "UI_SUITE=ChangeOfPlansTests" >> "$GITHUB_ENV"
+              echo "EXPECTED_TESTS=3" >> "$GITHUB_ENV"
+            else
+              echo "UI_SUITE=CardJourneyTests" >> "$GITHUB_ENV"
+              echo "EXPECTED_TESTS=8" >> "$GITHUB_ENV"
+            fi
+          fi
+          echo "IPHONE_UDID=$iphone" >> "$GITHUB_ENV"
+
+      - name: Launch the app and test adding, dragging, and scheduling
+        run: |
+          set -eo pipefail
+          xcodebuild \
+            -project MagnetBoard.xcodeproj \
+            -scheme MagnetBoard \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/magnetboard-derived-data" \
+            -destination "platform=iOS Simulator,id=$IPHONE_UDID" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/CardJourney.xcresult" \
+            "-only-testing:MagnetBoardUITests/$UI_SUITE" \
+            test
+          # A successful build or an empty/skipped suite is not a passing UI test.
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/CardJourney.xcresult" > "$RUNNER_TEMP/ui-summary.json"
+          python3 -c 'import json, sys; s=json.load(open(sys.argv[1])); print(s); sys.exit(0 if s["passedTests"] == int(sys.argv[2]) and s["failedTests"] == 0 and s["skippedTests"] == 0 else 1)' "$RUNNER_TEMP/ui-summary.json" "$EXPECTED_TESTS"
+
+      - name: Show drag diagnostics on UI test failure
+        if: failure() && env.IPHONE_UDID != ''
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          xcrun simctl spawn "$IPHONE_UDID" log show --last 25m --style compact \
+            --predicate 'subsystem == "chrysalis.MagnetBoard" AND category == "TrayDrop"'
+
+      - name: Verify bundled Calendar and drag declarations
+        run: |
+          info="$RUNNER_TEMP/magnetboard-derived-data/Build/Products/Debug-iphonesimulator/MagnetBoard.app/Info.plist"
+          plutil -lint "$info"
+          test -s "$(dirname "$info")/TravelHolidays.json"
+          test -s "$(dirname "$info")/HolidayCalendarLicense.txt"
+          /usr/libexec/PlistBuddy -c 'Print :NSCalendarsWriteOnlyAccessUsageDescription' "$info"
+          /usr/libexec/PlistBuddy -c 'Print :NSCalendarsFullAccessUsageDescription' "$info"
+          /usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations' "$info"
+
+      - name: Run planner regression checks
+        if: ${{ !cancelled() && matrix.profile == 'everyday' }}
+        run: |
+          xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+            -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+            -target "$(uname -m)-apple-macosx14.0" \
+            MagnetBoard/Models.swift MagnetBoard/BoardViewModel.swift MagnetBoard/ScheduleViewModel.swift \
+            MagnetBoard/NearbyBackups.swift MagnetBoard/TripClock.swift MagnetBoard/TripGuide.swift Tests/HamburgWeekChecks.swift Tests/PlannerRegressionChecks.swift -o "$RUNNER_TEMP/planner-checks"
+          "$RUNNER_TEMP/planner-checks"
+
+      - name: Sample live Hamburg transit (diagnostic only)
+        if: matrix.profile == 'everyday' && success()
+        continue-on-error: true
+        timeout-minutes: 2
+        run: '"$RUNNER_TEMP/planner-checks" --probe-hamburg-transit'

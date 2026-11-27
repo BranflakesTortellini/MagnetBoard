@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+    <string>Magnet Board adds exact-time plans to your calendar when you choose Export.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Magnet Board looks up a previously exported event so it can update that event without creating a duplicate.</string>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>chrysalis.magnetboard.idea-id</string>
+            <key>UTTypeDescription</key>
+            <string>Magnet Board Idea</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>chrysalis.magnetboard.placement-id</string>
+            <key>UTTypeDescription</key>
+            <string>Magnet Board Placement</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

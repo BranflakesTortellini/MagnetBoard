@@ -261,7 +261,7 @@ struct PlanContextBanner: View {
             Spacer()
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.secondarySystemGroupedBackground)))
+        .background(RoundedRectangle(cornerRadius: 14).fill(SystemPalette.secondaryGroupedBackground))
         .accessibilityElement(children: .combine)
     }
 }
