@@ -126,7 +126,11 @@ final class CardJourneyTests: XCTestCase {
         let originalID = original.identifier
         original.tap()
         let title = app.textFields["cardDetails.title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        guard title.waitForExistence(timeout: 10) else {
+            print(app.debugDescription)
+            return XCTFail("A single tap on a new board card did not open its title for editing")
+        }
+        XCTAssertEqual(title.value as? String, name, "Tapping a card opened a different card")
         title.tap()
         title.typeText(" revised")
         XCTAssertNotEqual(title.value as? String, name)

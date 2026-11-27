@@ -51,6 +51,13 @@ struct FreeBoardView: View {
 
                     ForEach(boardViewModel.ideas) { idea in
                         MagnetCardView(idea: idea, mode: .board)
+                            // Resolve taps and holds on the note, not its canvas-sized position wrapper.
+                            .contentShape(Rectangle())
+                            .gesture(boardMoveGesture(for: idea).exclusively(before:
+                                TapGesture().onEnded { selectedIdea = idea }
+                            ))
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityAction { selectedIdea = idea }
                             .accessibilityValue(Text(idea.group.title))
                             .accessibilityIdentifier("board.card.\(idea.id.uuidString)")
                             .position(boardPosition(for: idea))
@@ -59,10 +66,6 @@ struct FreeBoardView: View {
                             .rotationEffect(!reduceMotion && liftedIdeaID == idea.id ? .degrees(-1.2) : .degrees(0))
                             .zIndex(liftedIdeaID == idea.id ? 10 : 0)
                             .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.78), value: liftedIdeaID)
-                            .gesture(boardMoveGesture(for: idea))
-                            .onTapGesture {
-                                selectedIdea = idea
-                            }
                     }
                 }
                 .frame(width: canvasSize.width, height: canvasSize.height)
@@ -90,7 +93,7 @@ struct FreeBoardView: View {
     /// sticky note; then dragging moves it. This avoids most accidental moves
     /// while scrolling the two-axis board.
     private func boardMoveGesture(for idea: IdeaItem) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.16)
+        LongPressGesture(minimumDuration: 0.35)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("magnet-board-canvas")))
             .updating($boardDrag) { value, state, _ in
                 switch value {
