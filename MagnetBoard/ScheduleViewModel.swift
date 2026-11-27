@@ -11,6 +11,10 @@ public final class ScheduleViewModel: ObservableObject {
         didSet { save() }
     }
     @Published private(set) var storageIssue: String?
+    @Published private(set) var clock: TripClock
+    private let clockDefaults: UserDefaults?
+    private static let zoneKey = "planning.destinationTimeZone"
+    private let transitETA: (MKDirections.Request) async throws -> TimeInterval
 
     private let eventStore = EKEventStore()
     private let saveURL: URL?
@@ -20,12 +24,27 @@ public final class ScheduleViewModel: ObservableObject {
 
     public convenience init() {
         self.init(saveURL: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-            .first?.appendingPathComponent("magnet_board_events.json"))
+            .first?.appendingPathComponent("magnet_board_events.json"), clockDefaults: .standard)
     }
 
-    init(saveURL: URL?) {
+    init(saveURL: URL?, clockDefaults: UserDefaults? = nil, deviceZone: TimeZone = .current,
+         transitETA: @escaping (MKDirections.Request) async throws -> TimeInterval = { request in
+             let result = try await MKDirections(request: request).calculateETA()
+             return result.expectedTravelTime
+         }) {
         self.saveURL = saveURL
+        self.clockDefaults = clockDefaults
+        self.transitETA = transitETA
+        let zone = clockDefaults?.string(forKey: Self.zoneKey).flatMap { TimeZone(identifier: $0) } ?? deviceZone
+        clock = TripClock(zone: zone)
+        // Anchor even the initial zone so a journey never silently retimes a plan.
+        clockDefaults?.set(zone.identifier, forKey: Self.zoneKey)
         load()
+    }
+
+    func useTripZone(_ zone: TimeZone) {
+        clockDefaults?.set(zone.identifier, forKey: Self.zoneKey)
+        clock = TripClock(zone: zone)
     }
 
     /// Creates an in-app scheduled item only. This intentionally does NOT write to Apple Calendar.
@@ -143,7 +162,7 @@ public final class ScheduleViewModel: ObservableObject {
               !events[index].isLocked, events[index].schedulePrecision != .exactTime else { return false }
         var event = events[index]
         let precision: SchedulePrecision = part == nil ? .dayOnly : .dayPart
-        if Calendar.current.isDate(date, inSameDayAs: event.startDate),
+        if clock.calendar.isDate(date, inSameDayAs: event.startDate),
            event.dayPart == part, event.schedulePrecision == precision { return true }
         let duration = event.endDate.timeIntervalSince(event.startDate)
         event.startDate = firstOpenSlot(on: date, preferredHour: part?.proxyHour ?? 12,
@@ -190,10 +209,10 @@ public final class ScheduleViewModel: ObservableObject {
         // and day-only cards in the middle unless manually reordered.
         let duration = max(events[index].endDate.timeIntervalSince(events[index].startDate), 15 * 60)
         let hour = precision == .dayPart ? (dayPart?.proxyHour ?? 12) : 12
-        var components = Calendar.current.dateComponents([.year, .month, .day], from: events[index].startDate)
+        var components = clock.calendar.dateComponents([.year, .month, .day], from: events[index].startDate)
         components.hour = hour
         components.minute = 0
-        if let newStart = Calendar.current.date(from: components) {
+        if let newStart = clock.calendar.date(from: components) {
             events[index].startDate = newStart
             events[index].endDate = newStart.addingTimeInterval(duration)
         }
@@ -246,10 +265,10 @@ public final class ScheduleViewModel: ObservableObject {
     }
 
     private func dateAtHour(_ hour: Int, on date: Date) -> Date {
-        var components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        var components = clock.calendar.dateComponents([.year, .month, .day], from: date)
         components.hour = hour
         components.minute = 0
-        return Calendar.current.date(from: components) ?? date
+        return clock.calendar.date(from: components) ?? date
     }
 
     private func categoryAwareOrder(_ input: [EventItem], settings: SequenceRuleSettings) -> [EventItem] {
@@ -497,6 +516,7 @@ public final class ScheduleViewModel: ObservableObject {
             }
 
             ekEvent.title = event.title
+            ekEvent.timeZone = clock.zone
             ekEvent.startDate = event.startDate
             ekEvent.endDate = event.endDate
             ekEvent.notes = event.notes.isEmpty ? nil : event.notes
@@ -516,14 +536,14 @@ public final class ScheduleViewModel: ObservableObject {
 
     public func events(on date: Date) -> [EventItem] {
         events
-            .filter { Calendar.current.isDate($0.startDate, inSameDayAs: date) }
+            .filter { clock.calendar.isDate($0.startDate, inSameDayAs: date) }
             .sorted { $0.startDate < $1.startDate }
     }
 
     public func firstOpenSlot(on date: Date,
                               preferredHour: Int = 12,
                               duration: TimeInterval = 60 * 60, excluding id: UUID? = nil) -> Date {
-        let calendar = Calendar.current
+        let calendar = clock.calendar
         let preferred = dateAtHour(preferredHour, on: date)
         guard calendar.isDate(preferred, inSameDayAs: date) else { return date }
         var candidate = preferred
@@ -548,7 +568,7 @@ public final class ScheduleViewModel: ObservableObject {
     }
 
     public func conflictWarnings(for date: Date) -> [String] {
-        guard let day = Calendar.current.dateInterval(of: .day, for: date) else { return [] }
+        guard let day = clock.calendar.dateInterval(of: .day, for: date) else { return [] }
         let exactEvents = eventsOverlapping(day).filter { $0.schedulePrecision == .exactTime }
             .sorted { $0.startDate < $1.startDate }
         guard exactEvents.count > 1 else { return [] }
@@ -653,8 +673,8 @@ public final class ScheduleViewModel: ObservableObject {
         var warnings: [String] = []
         let exactEvents = dayEvents.filter { $0.schedulePrecision == .exactTime }
         for event in exactEvents {
-            let start = planningHour(event.startDate, relativeTo: date)
-            let end = planningHour(event.endDate, relativeTo: date)
+            let start = planningHour(event.startDate, relativeTo: date, calendar: clock.calendar)
+            let end = planningHour(event.endDate, relativeTo: date, calendar: clock.calendar)
             if start < startHour {
                 warnings.append("\(event.title) starts before your usual day start.")
             }
@@ -678,7 +698,7 @@ public final class ScheduleViewModel: ObservableObject {
         let title = planName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Magnet Board plan" : planName
         var lines: [String] = []
         lines.append(title)
-        lines.append(date.formatted(date: .abbreviated, time: .omitted))
+        lines.append("\(clock.date(date)) · \(clock.zone.identifier)")
         if !homeBaseName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append("Home base: \(homeBaseName)")
             if let homeStartTravelStatus {
@@ -719,7 +739,7 @@ public final class ScheduleViewModel: ObservableObject {
     private func plainPlacementLabel(for event: EventItem) -> String {
         switch event.schedulePrecision {
         case .exactTime:
-            return "\(event.startDate.formatted(date: .omitted, time: .shortened))–\(event.endDate.formatted(date: .omitted, time: .shortened))"
+            return "\(clock.time(event.startDate))–\(clock.time(event.endDate))"
         case .dayPart:
             return event.dayPart.map { "\($0.label), rough" } ?? "part of day, rough"
         case .dayOnly:
@@ -745,15 +765,15 @@ public final class ScheduleViewModel: ObservableObject {
     /// contains its ETA. For transit, MapKit's ETA request is the supported path.
     func travelEstimate(from: CLLocationCoordinate2D?, to: CLLocationCoordinate2D?,
                         mode: TravelMode, departureDate: Date, arriveBy: Bool = false) async -> (TravelLegStatus, MKPolyline?) {
-        guard let directions = makeDirections(from: from, to: to, mode: mode, departureDate: departureDate, arriveBy: arriveBy) else {
+        guard let request = Self.tripDirectionsRequest(from: from, to: to, mode: mode, date: departureDate, arriveBy: arriveBy) else {
             return (.missingCoordinates, nil)
         }
         do {
             if mode == .transit {
-                let response = try await directions.calculateETA()
-                return (.mapEstimate(seconds: response.expectedTravelTime, mode: mode, note: mode.estimateNote), nil)
+                let seconds = try await transitETA(request)
+                return (.mapEstimate(seconds: seconds, mode: mode, note: mode.estimateNote), nil)
             }
-            let response = try await directions.calculate()
+            let response = try await MKDirections(request: request).calculate()
             guard let route = response.routes.first else {
                 return (.failed(message: "No route was returned."), nil)
             }
@@ -890,7 +910,7 @@ public final class ScheduleViewModel: ObservableObject {
             return decoded
         }
         var migrated = decoded
-        let days = Dictionary(grouping: decoded.indices) { Calendar.current.startOfDay(for: decoded[$0].startDate) }
+        let days = Dictionary(grouping: decoded.indices) { clock.calendar.startOfDay(for: decoded[$0].startDate) }
         for indices in days.values {
             let ordered = indices.sorted { decoded[$0].startDate < decoded[$1].startDate }
             for (position, index) in ordered.enumerated() where decoded[index].manualTravelToNextSeconds != nil && decoded[index].manualTravelTarget == nil {

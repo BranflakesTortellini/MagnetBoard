@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MovePlacementSheet: View {
+    @Environment(\.calendar) private var calendar
     let event: EventItem
     let move: (Date, DayPart?) -> Void
     @State private var date: Date
@@ -18,7 +19,7 @@ struct MovePlacementSheet: View {
                 Section(event.title) {
                     DatePicker("Day", selection: $date, displayedComponents: .date)
                     Button("Tomorrow") {
-                        date = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date())) ?? date
+                        date = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date())) ?? date
                     }
                 }
                 Section("Move to") {

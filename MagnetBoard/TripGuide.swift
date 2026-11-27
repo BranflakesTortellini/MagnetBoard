@@ -37,8 +37,8 @@ struct TripCalendar: Decodable {
         return parts.count == 1 ? name : "\(name) · \(regions[parts[1]] ?? parts[1])"
     }
 
-    func notices(day: Date, codes: [String]) -> [String] {
-        let key = Self.dateKey(day)
+    func notices(day: Date, codes: [String], zone: TimeZone = .current) -> [String] {
+        let key = Self.dateKey(day, zone: zone)
         return codes.compactMap { code in calendars[code]?[key].map { "\($0) · \(Self.name(code))" } }
     }
 }

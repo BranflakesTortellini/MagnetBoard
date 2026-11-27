@@ -37,13 +37,14 @@ public final class BoardViewModel: ObservableObject {
                         commitment: CardCommitment,
                         group: BoardGroup,
                         priority: Int,
-                        countryCode: String? = nil) {
+                        countryCode: String? = nil, timeZoneID: String? = nil) {
         var item = IdeaItem(title: title.trimmingCharacters(in: .whitespacesAndNewlines))
         item.duration = duration
         item.cost = cost
         item.locationName = locationName.trimmingCharacters(in: .whitespacesAndNewlines)
         item.coordinate = coordinate.map(CodableCoordinate.init)
         item.coordinate?.countryCode = countryCode
+        item.coordinate?.timeZoneID = timeZoneID
         item.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         item.tags = tags
         item.people = people

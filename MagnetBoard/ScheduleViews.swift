@@ -20,6 +20,19 @@ struct SchedulePlannerView: View {
     @State private var travelTask: Task<Void, Never>?
     @State private var lastTravelCheck: Date?
     @State private var showingTripGuide = false
+    @State private var choosingZone = false
+    private var clock: TripClock { scheduleViewModel.clock }
+
+    private var savedZones: [String: String] {
+        var result: [String: String] = [:]
+        for (pin, name) in boardViewModel.ideas.map({ ($0.coordinate, $0.locationName) })
+            + scheduleViewModel.events.map({ ($0.coordinate, $0.locationName) }) {
+            if let id = pin?.timeZoneID, TimeZone(identifier: id) != nil {
+                result[id] = name.isEmpty ? id : name
+            }
+        }
+        return result
+    }
     @AppStorage("planning.tripRegion") private var tripRegion = ""
     @State private var selectedTrayCard: UUID?
     @State private var choosingCardFor: TrayBasket?
@@ -67,6 +80,15 @@ struct SchedulePlannerView: View {
                 Spacer()
                 DatePicker("Plan date", selection: $selectedDate, displayedComponents: .date)
                     .datePickerStyle(.compact).labelsHidden()
+                Button { choosingZone = true } label: {
+                    if typeSize.isAccessibilitySize {
+                        Image(systemName: "clock").frame(minWidth: 44, minHeight: 44)
+                    } else {
+                        Label(clock.name, systemImage: "clock").lineLimit(1)
+                    }
+                }
+                .font(.subheadline).accessibilityLabel("Plan time zone: \(clock.zone.identifier)")
+                .accessibilityIdentifier("plan.zone")
                 Spacer()
                 dayArrow(1)
             }
@@ -131,7 +153,7 @@ struct SchedulePlannerView: View {
                       let moved = scheduleViewModel.events.first(where: { $0.id == original.id }),
                       original != moved else { return }
                 selectedDate = day
-                undoViewModel.register(title: "Moved to \(day.formatted(.dateTime.weekday(.wide)))",
+                undoViewModel.register(title: "Moved to \(clock.date(day))",
                                        message: moved.title, autoDismissSeconds: 15) {
                     if scheduleViewModel.undoReschedule(from: moved, to: original) { selectedDate = original.startDate }
                 }
@@ -150,6 +172,13 @@ struct SchedulePlannerView: View {
         .sheet(isPresented: $showingTripGuide) {
             TripGuideView(stops: travelInputs.events, day: selectedDate)
         }
+        .sheet(isPresented: $choosingZone) {
+            TripZonePicker(current: clock, places: savedZones) { zone in
+                let day = TripClock(zone: zone).keepingDay(selectedDate, from: clock)
+                scheduleViewModel.useTripZone(zone)
+                selectedDate = day
+            }
+        }
         .overlay {
             ClearBurstView(isVisible: showClearBurst)
                 .allowsHitTesting(false)
@@ -167,7 +196,7 @@ struct SchedulePlannerView: View {
     private var dayTools: some View {
         let inputs = travelInputs
         let destinations = TripCalendar.destinations(inputs.events, fallback: tripRegion)
-        let notices = TripCalendar.bundled?.notices(day: selectedDate, codes: destinations) ?? []
+        let notices = TripCalendar.bundled?.notices(day: selectedDate, codes: destinations, zone: clock.zone) ?? []
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(notices, id: \.self) { notice in
                 Label("\(notice). Hours may differ.", systemImage: "calendar.badge.clock")
@@ -191,7 +220,7 @@ struct SchedulePlannerView: View {
             }
             .font(.subheadline)
             if let lastTravelCheck {
-                Text("Travel checked at \(lastTravelCheck.formatted(date: .omitted, time: .shortened))")
+                Text("Travel checked at \(clock.time(lastTravelCheck))")
                     .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("travel.checked")
             }
         }
@@ -199,7 +228,7 @@ struct SchedulePlannerView: View {
 
     private func dayArrow(_ offset: Int) -> some View {
         Button {
-            if let date = Calendar.current.date(byAdding: .day, value: offset, to: selectedDate) { selectedDate = date }
+            if let date = clock.calendar.date(byAdding: .day, value: offset, to: selectedDate) { selectedDate = date }
         } label: {
             Image(systemName: offset < 0 ? "chevron.left" : "chevron.right").frame(width: 44, height: 44)
         }
@@ -306,7 +335,7 @@ struct SchedulePlannerView: View {
             }
         case .duplicateNotAllowed(let existing):
             Haptics.warning()
-            let day = existing.startDate.formatted(date: .abbreviated, time: .omitted)
+            let day = clock.date(existing.startDate)
             exportMessage = "\(idea.title) is already in the plan for \(day). Turn on ‘Can use this more than once’ in the card details if that is intentional."
         }
     }
@@ -376,7 +405,7 @@ struct SchedulePlannerView: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text(Calendar.current.isDateInToday(selectedDate) ? "Today’s flow" : "Day’s flow")
+                    Text(clock.calendar.isDateInToday(selectedDate) ? "Today’s flow" : "Day’s flow")
                         .font(.headline)
                     Spacer()
                     Menu {
@@ -655,6 +684,7 @@ struct SchedulePlannerView: View {
         let homeStart: CodableCoordinate?
         let homeEnd: CodableCoordinate?
         let day: Date
+        let zoneID: String
     }
 
     private var travelInputs: TravelInputs {
@@ -664,7 +694,7 @@ struct SchedulePlannerView: View {
             mode: selectedTravelMode,
             homeStart: hasHomeBase && includeHomeStartLeg ? home : nil,
             homeEnd: hasHomeBase && includeHomeEndLeg ? home : nil,
-            day: Calendar.current.startOfDay(for: selectedDate)
+            day: clock.calendar.startOfDay(for: selectedDate), zoneID: clock.zone.identifier
         )
     }
 
@@ -741,6 +771,8 @@ struct SchedulePlannerView: View {
 
 
 struct DaySummaryCard: View {
+    @Environment(\.timeZone) private var zone
+    private var clock: TripClock { TripClock(zone: zone) }
     let events: [EventItem]
     let travelLegStatuses: [UUID: TravelLegStatus]
     let homeStartTravelStatus: TravelLegStatus?
@@ -795,7 +827,7 @@ struct DaySummaryCard: View {
               first.schedulePrecision == .exactTime,
               let seconds = homeStartTravelStatus?.seconds else { return nil }
         let leave = first.startDate.addingTimeInterval(-seconds)
-        return "Leave home around \(leave.formatted(date: .omitted, time: .shortened))."
+        return "Leave home around \(clock.time(leave))."
     }
 
     private var backHomeDate: Date? {
@@ -807,12 +839,12 @@ struct DaySummaryCard: View {
 
     private var backHomeSuggestion: String? {
         guard let backHomeDate else { return nil }
-        return "Back home around \(backHomeDate.formatted(date: .omitted, time: .shortened))."
+        return "Back home around \(clock.time(backHomeDate))."
     }
 
     private var backHomeIsLate: Bool {
         guard useDayBounds, let backHomeDate, let last = events.last else { return false }
-        return planningHour(backHomeDate, relativeTo: last.startDate) > preferredDayEndHour
+        return planningHour(backHomeDate, relativeTo: last.startDate, calendar: clock.calendar) > preferredDayEndHour
     }
 
     var body: some View {
@@ -1014,6 +1046,8 @@ private struct ScheduleDropZone: View {
 }
 
 struct ScheduledEventRow: View {
+    @Environment(\.timeZone) private var zone
+    private var clock: TripClock { TripClock(zone: zone) }
     let event: EventItem
     let nextEvent: EventItem?
     let travelMode: TravelMode
@@ -1113,6 +1147,7 @@ struct ScheduledEventRow: View {
                     Image(systemName: "ellipsis.circle")
                         .font(.title3)
                 }
+                .accessibilityIdentifier("planned.actions.\(event.ideaID.uuidString)")
             }
 
             if event.canChangeForBackup {
@@ -1138,11 +1173,11 @@ struct ScheduledEventRow: View {
             }
 
             if let nextEvent, let travelLegStatus {
-                Text("To \(nextEvent.title) · \(event.schedulePrecision == .exactTime ? "leave" : "rough departure") \(event.endDate.formatted(date: .omitted, time: .shortened))")
+                Text("To \(nextEvent.title) · \(event.schedulePrecision == .exactTime ? "leave" : "rough departure") \(clock.time(event.endDate))")
                     .font(.caption.weight(.semibold))
                 TravelLegStatusView(status: travelLegStatus, travelMode: travelMode)
                 if let seconds = travelLegStatus.seconds {
-                    Text("Estimated arrival: \(event.endDate.addingTimeInterval(seconds).formatted(date: .omitted, time: .shortened))").font(.caption)
+                    Text("Estimated arrival: \(clock.time(event.endDate.addingTimeInterval(seconds)))").font(.caption)
                 }
                 if let source = event.coordinate, let destination = nextEvent.coordinate {
                     Button { TripMaps.directions(from: source, to: destination, mode: travelMode) } label: {
@@ -1199,7 +1234,7 @@ struct ScheduledEventRow: View {
     private var schedulePlacementLabel: String {
         switch event.schedulePrecision {
         case .exactTime:
-            return "\(event.startDate.formatted(date: .omitted, time: .shortened))–\(event.endDate.formatted(date: .omitted, time: .shortened))"
+            return "\(clock.time(event.startDate))–\(clock.time(event.endDate))"
         case .dayPart:
             if let dayPart = event.dayPart {
                 return "\(dayPart.label) · rough"
@@ -1248,6 +1283,8 @@ struct TravelLegStatusView: View {
 }
 
 struct ExactTimeSheet: View {
+    @Environment(\.timeZone) private var zone
+    private var clock: TripClock { TripClock(zone: zone) }
     @State private var startDate: Date
 
     let duration: TimeInterval
@@ -1268,8 +1305,11 @@ struct ExactTimeSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    DatePicker("Start", selection: $startDate, displayedComponents: [.date, .hourAndMinute])
-                    Text("End: \(startDate.addingTimeInterval(duration).formatted(date: .omitted, time: .shortened))")
+                    DatePicker("Day", selection: $startDate, displayedComponents: .date)
+                    DatePicker("Start", selection: $startDate, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.wheel)
+                    LabeledContent("Time zone", value: clock.zone.identifier)
+                    Text("End: \(clock.time(startDate.addingTimeInterval(duration)))")
                         .foregroundStyle(.secondary)
                 } header: {
                     Text("Exact time")

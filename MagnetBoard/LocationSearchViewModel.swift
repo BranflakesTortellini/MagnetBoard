@@ -92,6 +92,7 @@ public final class LocationSearchViewModel: ObservableObject {
                     let subtitle = subtitleParts.joined(separator: ", ")
                     var pin = CodableCoordinate(item.placemark.coordinate)
                     pin.countryCode = item.placemark.isoCountryCode
+                    pin.timeZoneID = item.timeZone?.identifier
                     return LocationSearchResult(
                         name: name,
                         subtitle: subtitle,

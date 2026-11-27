@@ -17,6 +17,7 @@ struct AddIdeaView: View {
     @State private var longitude = ""
     @State private var selectedCoordinate: CLLocationCoordinate2D?
     @State private var selectedCountry: String?
+    @State private var selectedZoneID: String?
     @State private var showingLocationSearch = false
     @State private var notes = ""
     @State private var tags = ""
@@ -174,6 +175,7 @@ struct AddIdeaView: View {
                     longitude = String(format: "%.6f", result.coordinate.longitude)
                     selectedCoordinate = result.coordinate.clLocationCoordinate2D
                     selectedCountry = result.coordinate.countryCode
+                    selectedZoneID = result.coordinate.timeZoneID
                     showingLocationSearch = false
                 } onCancel: {
                     showingLocationSearch = false
@@ -236,7 +238,8 @@ struct AddIdeaView: View {
             allowsMultipleScheduledInstances: allowsMultipleScheduledInstances,
             commitment: commitment,
             group: group,
-            priority: priority, countryCode: selectedCoordinate == nil ? nil : selectedCountry
+            priority: priority, countryCode: selectedCoordinate == nil ? nil : selectedCountry,
+            timeZoneID: selectedCoordinate == nil ? nil : selectedZoneID
         )
         isPresented = false
     }

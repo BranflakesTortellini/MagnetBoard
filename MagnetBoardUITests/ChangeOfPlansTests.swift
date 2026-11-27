@@ -2,6 +2,81 @@ import XCTest
 
 final class ChangeOfPlansTests: XCTestCase {
     @MainActor
+    func testTwoPMHamburgMuseumFromLosAngelesAndAfterArrival() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        let museum = UUID().uuidString, lunch = UUID().uuidString
+        let source: [String: Any] = ["latitude": 53.555, "longitude": 10.003, "countryCode": "DE", "timeZoneID": "Europe/Berlin"]
+        let destination: [String: Any] = ["latitude": 53.543, "longitude": 9.988, "countryCode": "DE"]
+        func json(_ object: Any) throws -> String {
+            String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        }
+        app.launchArguments = ["-welcome.hasSeenMagnetBoardIntro", "YES", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchEnvironment["MAGNETBOARD_TEST_BOARD"] = UUID().uuidString
+        app.launchEnvironment["MAGNETBOARD_TEST_DAY"] = "2027-07-10T12:00:00Z"
+        app.launchEnvironment["MAGNETBOARD_TEST_IDEAS"] = try json([
+            ["id": museum, "title": "Museum", "locationName": "Kunsthalle Hamburg", "duration": 3600, "coordinate": source] as [String: Any]
+        ])
+        app.launchEnvironment["MAGNETBOARD_TEST_EVENTS"] = try json([
+            ["id": UUID().uuidString, "ideaID": lunch, "title": "Cafe", "coordinate": destination,
+             "startDate": "2027-07-10T14:00:00Z", "endDate": "2027-07-10T15:00:00Z"] as [String: Any]
+        ])
+        app.launchEnvironment["MAGNETBOARD_TEST_TRANSIT"] = try json([
+            "departure": "2027-07-10T13:00:00Z", "from": source, "to": destination, "seconds": 23 * 60
+        ] as [String: Any])
+        func launch(in device: String) {
+            app.launchEnvironment["TZ"] = device
+            app.launchEnvironment["MAGNETBOARD_TEST_DEVICE_ZONE"] = device
+            app.launch()
+            app.tabBars.buttons["Plan"].tap()
+        }
+        let scroll = app.scrollViews["plan.scroll"]
+        let zone = app.buttons["plan.zone"]
+        let row = app.buttons["planned.card.\(museum)"]
+        func verifyVisitAndRide() {
+            XCTAssertTrue(zone.label.contains("Europe/Berlin"))
+            let mode = app.buttons["travel.mode"]
+            reveal([mode], in: scroll)
+            mode.tap()
+            app.buttons["Transit"].tap()
+            app.buttons["travel.refresh"].tap()
+            let bus = app.buttons["Bus, stops & transfers in Maps"]
+            reveal([bus], in: scroll)
+            XCTAssertTrue(row.label.contains("2:00") && row.label.contains("3:00") && row.label.contains("PM"), row.label)
+            XCTAssertTrue(app.staticTexts["Travel to next: 23 min by transit"].exists)
+            let arrival = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Estimated arrival: 3:23' AND label ENDSWITH 'PM'")).firstMatch
+            XCTAssertTrue(arrival.exists)
+        }
+
+        launch(in: "America/Los_Angeles")
+        XCTAssertTrue(zone.label.contains("America/Los_Angeles"))
+        zone.tap()
+        let search = app.searchFields.firstMatch
+        search.tap()
+        search.typeText("Hamburg")
+        app.buttons["zone.option.Europe/Berlin"].tap()
+        let afternoon = app.buttons["drop.afternoon"]
+        reveal([afternoon], in: scroll)
+        afternoon.tap()
+        app.buttons["planPicker.card.\(museum)"].tap()
+        let actions = app.buttons["planned.actions.\(museum)"]
+        reveal([actions], in: scroll)
+        actions.tap()
+        app.buttons["Set exact time…"].tap()
+        let hour = app.pickerWheels.element(boundBy: 0)
+        XCTAssertTrue(hour.waitForExistence(timeout: 8))
+        // The afternoon bucket starts at 1 pm in the destination zone.
+        hour.adjust(toPickerWheelValue: "2")
+        app.buttons["Save"].tap()
+        verifyVisitAndRide()
+        app.terminate()
+        app.launchEnvironment.removeValue(forKey: "MAGNETBOARD_TEST_IDEAS")
+        app.launchEnvironment.removeValue(forKey: "MAGNETBOARD_TEST_EVENTS")
+        launch(in: "Europe/Berlin")
+        verifyVisitAndRide()
+    }
+
+    @MainActor
     func testHolidayDayTravelAndSearchableLocalGuide() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

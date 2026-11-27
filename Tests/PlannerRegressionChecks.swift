@@ -19,8 +19,48 @@ struct PlannerRegressionChecks {
         checkMoveAcrossDays(day, file: directory.appendingPathComponent("move.json"))
         checkHamburgWeek(directory: directory)
         try checkTripGuide()
+        checkDestinationClock(file: directory.appendingPathComponent("hamburg-clock.json"))
         try checkDamagedSave(day, file: directory.appendingPathComponent("damaged.json"))
         print("Planner regression checks passed.")
+    }
+
+    static func checkDestinationClock(file: URL) {
+        let suite = "MagnetBoard.ClockChecks.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let formatter = ISO8601DateFormatter()
+        func utc(_ s: String) -> Date { formatter.date(from: s)! }
+        let home = TimeZone(identifier: "America/Los_Angeles")!, hamburg = TimeZone(identifier: "Europe/Berlin")!
+        let vm = ScheduleViewModel(saveURL: file, clockDefaults: defaults, deviceZone: home)
+        precondition(vm.clock.zone == home)
+        vm.useTripZone(hamburg)
+        for (day, start) in [("2027-07-10", "12"), ("2027-01-10", "13"), ("2027-03-20", "13")] {
+            // March 20 falls between the US and European spring transitions.
+            let instant = vm.firstOpenSlot(on: utc("\(day)T10:00:00Z"), preferredHour: 14)
+            precondition(instant == utc("\(day)T\(start):00:00Z"))
+        }
+        var museum = IdeaItem(title: "Museum")
+        museum.duration = 3600
+        let day = utc("2027-07-10T12:00:00Z")
+        guard case let .scheduled(visit) = vm.scheduleIdea(museum, startDate: vm.firstOpenSlot(on: day, preferredHour: 14))
+        else { preconditionFailure("Could not schedule museum") }
+        precondition(visit.startDate == day && visit.endDate == utc("2027-07-10T13:00:00Z"))
+        let arrived = ScheduleViewModel(saveURL: file, clockDefaults: defaults, deviceZone: hamburg)
+        let abroad = ScheduleViewModel(saveURL: file, clockDefaults: defaults, deviceZone: TimeZone(identifier: "Asia/Tokyo")!)
+        for reopened in [arrived, abroad] {
+            precondition(reopened.clock.zone == hamburg && reopened.events(on: day) == [visit])
+            precondition(reopened.clock.calendar.component(.hour, from: visit.startDate) == 14)
+            precondition(reopened.clock.calendar.component(.hour, from: visit.endDate) == 15)
+        }
+        let early = card("Early train", utc("2027-07-09T22:15:00Z"))
+        arrived.restoreEvent(early)
+        precondition(arrived.events(on: day).first == early, "00:15 belongs to July 10 in Hamburg")
+        let nearMidnight = utc("2027-07-10T06:30:00Z") // Still July 9 in Los Angeles.
+        let sameDay = vm.clock.keepingDay(nearMidnight, from: TripClock(zone: home))
+        precondition(TripCalendar.dateKey(sameDay, zone: hamburg) == "2027-07-09")
+        arrived.useTripZone(home)
+        precondition(arrived.events.first { $0.id == visit.id } == visit, "Zone edits must not move a booking")
+        print("Hamburg 14:00 from Los Angeles: summer, winter, DST mismatch, relaunch, midnight and existing bookings passed.")
     }
 
     static func checkTripGuide() throws {

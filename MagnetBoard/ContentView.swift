@@ -33,6 +33,8 @@ public struct ContentView: View {
 
             NavigationStack {
                 SchedulePlannerView(selectedDate: $selectedDate)
+                    .environment(\.calendar, scheduleViewModel.clock.calendar)
+                    .environment(\.timeZone, scheduleViewModel.clock.zone)
                     .navigationTitle("Plan")
                     .toolbar { helpToolbar }
             }

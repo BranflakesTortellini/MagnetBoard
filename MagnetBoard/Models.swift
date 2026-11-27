@@ -17,6 +17,7 @@ public struct CodableCoordinate: Codable, Hashable {
     public var longitude: Double
     // Optional for old boards and user-entered coordinates. Never inferred from device locale.
     public var countryCode: String? = nil
+    public var timeZoneID: String? = nil
 
     public init(latitude: Double, longitude: Double) {
         self.latitude = latitude

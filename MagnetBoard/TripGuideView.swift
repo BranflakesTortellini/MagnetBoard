@@ -6,6 +6,7 @@ struct TripGuideView: View {
     @AppStorage("planning.tripRegion") private var fallback = ""
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @Environment(\.timeZone) private var zone
     private var codes: [String] { TripCalendar.destinations(stops, fallback: fallback) }
 
     var body: some View {
@@ -17,9 +18,9 @@ struct TripGuideView: View {
                     } label: { LabeledContent("Trip destination", value: TripCalendar.name(fallback)) }
                 } footer: { Text("Countries saved with this day’s places take priority. No location tracking.") }
                 if let calendar = TripCalendar.bundled {
-                    Section(day.formatted(date: .complete, time: .omitted)) {
+                    Section(TripClock(zone: zone).date(day, complete: true)) {
                         ForEach(codes, id: \.self) { code in
-                            let key = TripCalendar.dateKey(day)
+                            let key = TripCalendar.dateKey(day, zone: zone)
                             let dates = calendar.calendars[code]
                             let hasYear = dates?.keys.contains(where: { $0.hasPrefix(String(key.prefix(4)) + "-") }) == true
                             LabeledContent(TripCalendar.name(code), value: dates?[key] ?? (hasYear ? "No holiday listed" : "No calendar coverage"))
