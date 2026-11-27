@@ -40,6 +40,7 @@ jobs:
           set -eo pipefail
           sdk=$(xcrun --sdk iphonesimulator --show-sdk-version)
           if [[ "$PROFILE" == "compact-large-text" ]]; then
+            defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
             runtime=$(xcrun simctl list devices available --json | python3 .github/scripts/select_iphone.py "$sdk" --runtime)
             iphone=$(xcrun simctl create "MagnetBoard SE" com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation "$runtime")
             xcrun simctl boot "$iphone"

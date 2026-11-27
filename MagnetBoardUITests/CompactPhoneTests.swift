@@ -36,13 +36,18 @@ final class CompactPhoneTests: XCTestCase {
         // lowercase label, depending on keyboard layout.
         let done = keyboard.descendants(matching: .any).matching(NSPredicate(
             format: "label ==[c] %@ OR identifier ==[c] %@", "done", "done")).firstMatch
-        guard done.exists && done.isHittable else {
-            print(keyboard.debugDescription)
-            return XCTFail("The software keyboard did not expose a tappable Done key")
-        }
-        done.tap()
+        XCTAssertTrue(done.exists && !done.frame.isEmpty && app.frame.contains(done.frame))
+        // The remote system keyboard can report no XCTest hit point even when
+        // the key is fully on screen. Tap its actual screen location, then
+        // require the app to confirm a real placement and a successful Undo.
+        let keyFrame = done.frame
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: keyFrame.midX - app.frame.minX, dy: keyFrame.midY - app.frame.minY)).tap()
         let undo = app.buttons["Undo"]
-        XCTAssertTrue(undo.waitForExistence(timeout: 10))
+        guard undo.waitForExistence(timeout: 10) else {
+            print(app.debugDescription)
+            return XCTFail("Tapping Done did not schedule the card and offer Undo")
+        }
         XCTAssertTrue(undo.isHittable && app.frame.contains(undo.frame))
         undo.tap()
         XCTAssertFalse(undo.exists)
