@@ -2,7 +2,7 @@ import XCTest
 
 final class ChangeOfPlansTests: XCTestCase {
     @MainActor
-    func testTwoPMHamburgMuseumFromLosAngelesAndAfterArrival() throws {
+    func testDestinationTimeForHamburgMuseumFromLosAngelesAndAfterArrival() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         let museum = UUID().uuidString, lunch = UUID().uuidString
@@ -36,14 +36,18 @@ final class ChangeOfPlansTests: XCTestCase {
         func verifyVisitAndRide() {
             XCTAssertTrue(zone.label.contains("Europe/Berlin"))
             let mode = app.buttons["travel.mode"]
-            reveal([mode], in: scroll)
+            // The first control sits inside the top margin reserved for long
+            // drag gestures by reveal(). A normal tap needs no such clearance.
+            scroll.swipeDown()
+            if !mode.isHittable { scroll.swipeDown() }
+            XCTAssertTrue(mode.isHittable)
             mode.tap()
             app.buttons["Transit"].tap()
             app.buttons["travel.refresh"].tap()
             let bus = app.buttons["Bus, stops & transfers in Maps"]
             reveal([bus], in: scroll)
             XCTAssertTrue(row.label.contains("2:00") && row.label.contains("3:00") && row.label.contains("PM"), row.label)
-            XCTAssertTrue(app.staticTexts["Travel to next: 23 min by transit"].exists)
+            XCTAssertTrue(app.staticTexts["Travel to next: 23 min by transit"].waitForExistence(timeout: 8))
             let arrival = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Estimated arrival: 3:23' AND label ENDSWITH 'PM'")).firstMatch
             XCTAssertTrue(arrival.exists)
         }
