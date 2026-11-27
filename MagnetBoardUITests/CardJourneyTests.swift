@@ -63,7 +63,7 @@ final class CardJourneyTests: XCTestCase {
         let field = app.textFields["planPicker.title"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()
-        field.typeText("Wunderland")
+        field.enterName("Wunderland")
         let museum = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
                                                        "planPicker.card.", "Miniatur Wunderland")).firstMatch
         let id = String(museum.identifier.dropFirst("planPicker.card.".count))
@@ -74,7 +74,7 @@ final class CardJourneyTests: XCTestCase {
         morning.tap()
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()
-        field.typeText("Wunderland")
+        field.enterName("Wunderland")
         let restored = app.buttons["planPicker.card.\(id)"]
         XCTAssertTrue(restored.isEnabled, "Undo did not return the original one-off card to the available list")
         app.buttons["Cancel"].tap()
@@ -116,7 +116,7 @@ final class CardJourneyTests: XCTestCase {
         let newTitle = app.textFields["newIdea.title"]
         XCTAssertTrue(newTitle.waitForExistence(timeout: 10))
         newTitle.tap()
-        newTitle.typeText(name)
+        newTitle.enterName(name)
         XCTAssertEqual(newTitle.value as? String, name)
         newTitle.typeText("\n")
         let canvas = app.scrollViews["board.canvas"]
@@ -161,7 +161,7 @@ final class CardJourneyTests: XCTestCase {
         for _ in 0..<5 where !field.isHittable { app.swipeUp(velocity: .slow) }
         field.tap()
         let title = "Discard \(UUID().uuidString.prefix(8))"
-        field.typeText(title)
+        field.enterName(title)
         XCTAssertTrue(save.isEnabled)
         app.buttons["Cancel"].tap()
         XCTAssertTrue(add.waitForExistence(timeout: 8))
@@ -279,7 +279,7 @@ final class CardJourneyTests: XCTestCase {
         let input = app.textFields["planPicker.title"]
         XCTAssertTrue(input.waitForExistence(timeout: 10))
         input.tap()
-        input.typeText(name)
+        input.enterName(name)
         app.buttons["planPicker.confirm"].tap()
         let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
                                                    "planned.card.", name)).firstMatch
@@ -323,7 +323,7 @@ final class CardJourneyTests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["board.find.count"].label.contains("30"))
         field.tap()
-        field.typeText("riverfront")
+        field.enterName("riverfront")
         let result = app.buttons["board.result.\(target)"]
         XCTAssertTrue(result.waitForExistence(timeout: 8))
         result.tap()
@@ -400,6 +400,7 @@ private extension XCUIElement {
             typeText(String(group))
             expected += group
             remaining = remaining.dropFirst(group.count)
+            if value as? String == expected { continue }
             let received = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", expected), object: self)
             XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 10), .completed,
                            "Expected '\(expected)', received '\(value ?? "<empty>")'")
