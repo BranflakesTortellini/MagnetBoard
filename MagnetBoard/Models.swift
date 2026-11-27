@@ -15,6 +15,8 @@ func planningHour(_ date: Date, relativeTo day: Date, calendar: Calendar = .curr
 public struct CodableCoordinate: Codable, Hashable {
     public var latitude: Double
     public var longitude: Double
+    // Optional for old boards and user-entered coordinates. Never inferred from device locale.
+    public var countryCode: String? = nil
 
     public init(latitude: Double, longitude: Double) {
         self.latitude = latitude

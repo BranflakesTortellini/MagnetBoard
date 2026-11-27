@@ -90,10 +90,12 @@ public final class LocationSearchViewModel: ObservableObject {
                         item.placemark.country
                     ].compactMap { $0 }.filter { !$0.isEmpty }
                     let subtitle = subtitleParts.joined(separator: ", ")
+                    var pin = CodableCoordinate(item.placemark.coordinate)
+                    pin.countryCode = item.placemark.isoCountryCode
                     return LocationSearchResult(
                         name: name,
                         subtitle: subtitle,
-                        coordinate: CodableCoordinate(item.placemark.coordinate)
+                        coordinate: pin
                     )
                 }
                 self.message = self.results.isEmpty ? "No matching places found. You can still keep a loose location name or use a manual travel estimate." : nil

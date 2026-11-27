@@ -12,7 +12,15 @@ public struct ContentView: View {
     @AppStorage("welcome.hasSeenMagnetBoardIntro") private var hasSeenIntro = false
     @AppStorage(PlanningSettingsKeys.planName) private var planName = ""
 
-    public init() {}
+    public init() {
+        #if DEBUG && targetEnvironment(simulator)
+        let env = ProcessInfo.processInfo.environment
+        if UUID(uuidString: env["MAGNETBOARD_TEST_BOARD"] ?? "") != nil,
+           let stamp = env["MAGNETBOARD_TEST_DAY"], let day = ISO8601DateFormatter().date(from: stamp) {
+            _selectedDate = State(initialValue: day)
+        }
+        #endif
+    }
 
     public var body: some View {
         TabView {

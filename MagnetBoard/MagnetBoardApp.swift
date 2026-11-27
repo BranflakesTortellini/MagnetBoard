@@ -26,7 +26,11 @@ struct MagnetBoardApp: App {
     private static func makeSchedule() -> ScheduleViewModel {
         #if DEBUG && targetEnvironment(simulator)
         if let key = ProcessInfo.processInfo.environment["MAGNETBOARD_TEST_BOARD"], let id = UUID(uuidString: key) {
-            return ScheduleViewModel(saveURL: FileManager.default.temporaryDirectory.appendingPathComponent("plan-\(id).json"))
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("plan-\(id).json")
+            if !FileManager.default.fileExists(atPath: file.path), let json = ProcessInfo.processInfo.environment["MAGNETBOARD_TEST_EVENTS"] {
+                try? Data(json.utf8).write(to: file, options: .atomic)
+            }
+            return ScheduleViewModel(saveURL: file)
         }
         #endif
         return ScheduleViewModel()

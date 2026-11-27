@@ -16,6 +16,7 @@ struct AddIdeaView: View {
     @State private var latitude = ""
     @State private var longitude = ""
     @State private var selectedCoordinate: CLLocationCoordinate2D?
+    @State private var selectedCountry: String?
     @State private var showingLocationSearch = false
     @State private var notes = ""
     @State private var tags = ""
@@ -101,6 +102,7 @@ struct AddIdeaView: View {
                 }
 
                 Section("Optional details") {
+                    IndoorTagToggle(tags: $tags)
                     Toggle("Include duration", isOn: $includeDuration)
                     if includeDuration {
                         Stepper(value: $durationMinutes, in: 15...480, step: 15) {
@@ -171,6 +173,7 @@ struct AddIdeaView: View {
                     latitude = String(format: "%.6f", result.coordinate.latitude)
                     longitude = String(format: "%.6f", result.coordinate.longitude)
                     selectedCoordinate = result.coordinate.clLocationCoordinate2D
+                    selectedCountry = result.coordinate.countryCode
                     showingLocationSearch = false
                 } onCancel: {
                     showingLocationSearch = false
@@ -233,7 +236,7 @@ struct AddIdeaView: View {
             allowsMultipleScheduledInstances: allowsMultipleScheduledInstances,
             commitment: commitment,
             group: group,
-            priority: priority
+            priority: priority, countryCode: selectedCoordinate == nil ? nil : selectedCountry
         )
         isPresented = false
     }
@@ -323,6 +326,7 @@ struct IdeaDetailView: View {
                 }
 
                 Section("Details") {
+                    IndoorTagToggle(tags: $tagsText)
                     OptionalDurationEditor(duration: $idea.duration)
                     OptionalCostEditor(cost: $idea.cost)
                     HStack {
@@ -411,6 +415,20 @@ struct IdeaDetailView: View {
         dismiss()
     }
 
+}
+
+private struct IndoorTagToggle: View {
+    @Binding var tags: String
+
+    var body: some View {
+        Toggle("Indoors", isOn: Binding(get: {
+            splitCSV(tags).contains(where: IdeaItem.isIndoorTag)
+        }, set: { enabled in
+            var values = splitCSV(tags).filter { !IdeaItem.isIndoorTag($0) }
+            if enabled { values.append("indoors") }
+            tags = values.joined(separator: ", ")
+        }))
+    }
 }
 
 struct OptionalDurationEditor: View {

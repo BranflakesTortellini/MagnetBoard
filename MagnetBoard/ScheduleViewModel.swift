@@ -744,8 +744,8 @@ public final class ScheduleViewModel: ObservableObject {
     /// One Maps request per leg. For driving and walking, the route already
     /// contains its ETA. For transit, MapKit's ETA request is the supported path.
     func travelEstimate(from: CLLocationCoordinate2D?, to: CLLocationCoordinate2D?,
-                        mode: TravelMode, departureDate: Date) async -> (TravelLegStatus, MKPolyline?) {
-        guard let directions = makeDirections(from: from, to: to, mode: mode, departureDate: departureDate) else {
+                        mode: TravelMode, departureDate: Date, arriveBy: Bool = false) async -> (TravelLegStatus, MKPolyline?) {
+        guard let directions = makeDirections(from: from, to: to, mode: mode, departureDate: departureDate, arriveBy: arriveBy) else {
             return (.missingCoordinates, nil)
         }
         do {
@@ -764,14 +764,20 @@ public final class ScheduleViewModel: ObservableObject {
     }
 
     private func makeDirections(from: CLLocationCoordinate2D?, to: CLLocationCoordinate2D?,
-                                mode: TravelMode, departureDate: Date?) -> MKDirections? {
+                                mode: TravelMode, departureDate: Date?, arriveBy: Bool = false) -> MKDirections? {
+        guard let request = Self.tripDirectionsRequest(from: from, to: to, mode: mode, date: departureDate, arriveBy: arriveBy) else { return nil }
+        return MKDirections(request: request)
+    }
+
+    static func tripDirectionsRequest(from: CLLocationCoordinate2D?, to: CLLocationCoordinate2D?,
+                                      mode: TravelMode, date: Date?, arriveBy: Bool) -> MKDirections.Request? {
         guard let from, let to, CLLocationCoordinate2DIsValid(from), CLLocationCoordinate2DIsValid(to) else { return nil }
         let request = MKDirections.Request()
         request.source = MKMapItem(placemark: MKPlacemark(coordinate: from))
         request.destination = MKMapItem(placemark: MKPlacemark(coordinate: to))
         request.transportType = mode.mapKitTransportType
-        request.departureDate = departureDate
-        return MKDirections(request: request)
+        if arriveBy { request.arrivalDate = date } else { request.departureDate = date }
+        return request
     }
 
     public func calculateTravelLegStatus(fromCoordinate: CLLocationCoordinate2D?,

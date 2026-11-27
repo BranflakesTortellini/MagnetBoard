@@ -17,7 +17,10 @@ struct SchedulePlannerView: View {
     @State private var routePolylines: [MKPolyline] = []
     @State private var exportMessage: String?
     @State private var showClearBurst = false
-    @State private var travelRefreshID = UUID()
+    @State private var travelTask: Task<Void, Never>?
+    @State private var lastTravelCheck: Date?
+    @State private var showingTripGuide = false
+    @AppStorage("planning.tripRegion") private var tripRegion = ""
     @State private var selectedTrayCard: UUID?
     @State private var choosingCardFor: TrayBasket?
     @State private var movingPlacement: EventItem?
@@ -69,16 +72,9 @@ struct SchedulePlannerView: View {
             }
             .padding(.horizontal)
 
-            Picker("Travel", selection: $selectedTravelMode) {
-                ForEach(TravelMode.allCases) { mode in
-                    Label(mode.label, systemImage: mode.systemImage).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    dayTools
                     // Keep the drag source and destinations together on a phone.
                     unscheduledStrip
                     dropTargets
@@ -120,9 +116,9 @@ struct SchedulePlannerView: View {
         }
         .onPreferenceChange(BasketFramesKey.self) { basketFrames = $0 }
         .sheet(item: $findingBackup) { stop in
-            PlanBSheet(stop: stop) { id, rainyOnly in
+            PlanBSheet(stop: stop) { id, indoorsOnly in
                 findingBackup = nil
-                chooseBackup(id, for: stop, rainyOnly: rainyOnly)
+                chooseBackup(id, for: stop, indoorsOnly: indoorsOnly)
             } onSkip: {
                 findingBackup = nil
                 if stop.canChangeForBackup, scheduleViewModel.events.contains(stop) { deleteScheduledEvent(stop) }
@@ -149,8 +145,10 @@ struct SchedulePlannerView: View {
                     .accessibilityHidden(true)
             }
         }
-        .task(id: travelInputs) { [inputs = travelInputs] in
-            await computeTravel(for: inputs)
+        .onChange(of: travelInputs, initial: true) { _, inputs in resetTravel(for: inputs) }
+        .onDisappear { travelTask?.cancel(); travelTask = nil }
+        .sheet(isPresented: $showingTripGuide) {
+            TripGuideView(stops: travelInputs.events, day: selectedDate)
         }
         .overlay {
             ClearBurstView(isVisible: showClearBurst)
@@ -163,6 +161,39 @@ struct SchedulePlannerView: View {
             Button("OK", role: .cancel) { exportMessage = nil }
         } message: {
             Text(exportMessage ?? "")
+        }
+    }
+
+    private var dayTools: some View {
+        let inputs = travelInputs
+        let destinations = TripCalendar.destinations(inputs.events, fallback: tripRegion)
+        let notices = TripCalendar.bundled?.notices(day: selectedDate, codes: destinations) ?? []
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(notices, id: \.self) { notice in
+                Label("\(notice). Hours may differ.", systemImage: "calendar.badge.clock")
+                    .font(.subheadline).accessibilityIdentifier("trip.holiday")
+            }
+            let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout(spacing: 14))
+            layout {
+                Menu {
+                    Picker("Travel mode", selection: $selectedTravelMode) {
+                        ForEach(TravelMode.allCases) { mode in Label(mode.label, systemImage: mode.systemImage).tag(mode) }
+                    }
+                } label: { Label(selectedTravelMode.label, systemImage: selectedTravelMode.systemImage) }
+                .accessibilityIdentifier("travel.mode")
+                Button {
+                    requestTravel(for: inputs)
+                } label: { Label(travelTask == nil ? "Update travel" : "Updating…", systemImage: "arrow.clockwise") }
+                .disabled(travelTask != nil || inputs.events.isEmpty || (inputs.events.count < 2 && inputs.homeStart == nil && inputs.homeEnd == nil))
+                .accessibilityIdentifier("travel.refresh")
+                Button { showingTripGuide = true } label: { Label("Local guide", systemImage: "book") }
+                    .accessibilityIdentifier("trip.guide")
+            }
+            .font(.subheadline)
+            if let lastTravelCheck {
+                Text("Travel checked at \(lastTravelCheck.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("travel.checked")
+            }
         }
     }
 
@@ -454,10 +485,9 @@ struct SchedulePlannerView: View {
 
         let notes = scheduleViewModel.smartArrangeRoughEvents(on: selectedDate, settings: sequenceRuleSettings)
         Haptics.success()
-        travelRefreshID = UUID()
 
         if notes.isEmpty {
-            exportMessage = "I checked the flow and travel. Nothing obvious needed changing."
+            exportMessage = "Nothing in the order needed changing."
         } else {
             exportMessage = notes.joined(separator: "\n")
         }
@@ -478,9 +508,9 @@ struct SchedulePlannerView: View {
         )
     }
 
-    private func chooseBackup(_ id: UUID, for stop: EventItem, rainyOnly: Bool) {
+    private func chooseBackup(_ id: UUID, for stop: EventItem, indoorsOnly: Bool) {
         guard let previousCard = boardViewModel.ideas.first(where: { $0.id == id }),
-              let replacement = scheduleViewModel.useBackup(id, insteadOf: stop, board: boardViewModel.ideas, rainyOnly: rainyOnly) else {
+              let replacement = scheduleViewModel.useBackup(id, insteadOf: stop, board: boardViewModel.ideas, indoorsOnly: indoorsOnly) else {
             exportMessage = "The plan changed. Open Plan B again for the current choices."
             return
         }
@@ -624,7 +654,7 @@ struct SchedulePlannerView: View {
         let mode: TravelMode
         let homeStart: CodableCoordinate?
         let homeEnd: CodableCoordinate?
-        let refreshID: UUID
+        let day: Date
     }
 
     private var travelInputs: TravelInputs {
@@ -634,16 +664,36 @@ struct SchedulePlannerView: View {
             mode: selectedTravelMode,
             homeStart: hasHomeBase && includeHomeStartLeg ? home : nil,
             homeEnd: hasHomeBase && includeHomeEndLeg ? home : nil,
-            refreshID: travelRefreshID
+            day: Calendar.current.startOfDay(for: selectedDate)
         )
     }
 
-    private func computeTravel(for inputs: TravelInputs) async {
-        guard !Task.isCancelled else { return }
+    private func resetTravel(for inputs: TravelInputs) {
+        travelTask?.cancel()
+        travelTask = nil
+        lastTravelCheck = nil
         travelLegStatuses = [:]
         homeStartTravelStatus = nil
         homeEndTravelStatus = nil
         routePolylines = []
+        for (from, to) in zip(inputs.events, inputs.events.dropFirst()) {
+            travelLegStatuses[from.id] = from.manualTravel(to: to.id)
+                ?? (from.coordinate == nil || to.coordinate == nil ? .missingCoordinates : .notCalculated)
+        }
+    }
+
+    private func requestTravel(for inputs: TravelInputs) {
+        resetTravel(for: inputs)
+        travelTask = Task { @MainActor in
+            await computeTravel(for: inputs)
+            guard !Task.isCancelled, inputs == travelInputs else { return }
+            lastTravelCheck = Date()
+            travelTask = nil
+        }
+    }
+
+    private func computeTravel(for inputs: TravelInputs) async {
+        guard !Task.isCancelled else { return }
         guard let first = inputs.events.first, let last = inputs.events.last else { return }
 
         // An in-flight Maps request can return after SwiftUI cancels this task.
@@ -652,7 +702,7 @@ struct SchedulePlannerView: View {
             homeStartTravelStatus = .calculating
             let (status, polyline) = await scheduleViewModel.travelEstimate(
                 from: home.clLocationCoordinate2D, to: first.coordinate?.clLocationCoordinate2D,
-                mode: inputs.mode, departureDate: first.startDate
+                mode: inputs.mode, departureDate: first.startDate, arriveBy: true
             )
             guard !Task.isCancelled else { return }
             homeStartTravelStatus = status
@@ -1087,8 +1137,21 @@ struct ScheduledEventRow: View {
                     .foregroundStyle(.yellow)
             }
 
-            if let travelLegStatus {
+            if let nextEvent, let travelLegStatus {
+                Text("To \(nextEvent.title) · \(event.schedulePrecision == .exactTime ? "leave" : "rough departure") \(event.endDate.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption.weight(.semibold))
                 TravelLegStatusView(status: travelLegStatus, travelMode: travelMode)
+                if let seconds = travelLegStatus.seconds {
+                    Text("Estimated arrival: \(event.endDate.addingTimeInterval(seconds).formatted(date: .omitted, time: .shortened))").font(.caption)
+                }
+                if let source = event.coordinate, let destination = nextEvent.coordinate {
+                    Button { TripMaps.directions(from: source, to: destination, mode: travelMode) } label: {
+                        Label(travelMode == .transit ? "Bus, stops & transfers in Maps" : "Directions in Maps", systemImage: "map")
+                    }
+                    if travelMode == .transit {
+                        Text("Set Leave At in Maps to match the planned departure.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .padding()

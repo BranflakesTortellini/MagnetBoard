@@ -1,4 +1,5 @@
 import Foundation
+import MapKit
 
 // Compiled with the production models, outside the app target. No personal
 // documents, Maps queries, or Calendar authorization are needed for these cases.
@@ -17,8 +18,40 @@ struct PlannerRegressionChecks {
         checkRepeatAndUndo(day, file: directory.appendingPathComponent("undo.json"))
         checkMoveAcrossDays(day, file: directory.appendingPathComponent("move.json"))
         checkHamburgWeek(directory: directory)
+        try checkTripGuide()
         try checkDamagedSave(day, file: directory.appendingPathComponent("damaged.json"))
         print("Planner regression checks passed.")
+    }
+
+    static func checkTripGuide() throws {
+        let data = try Data(contentsOf: URL(fileURLWithPath: "MagnetBoard/TravelHolidays.json"))
+        let guide = try JSONDecoder().decode(TripCalendar.self, from: data)
+        let day = ISO8601DateFormatter().date(from: "2026-10-03T12:00:00Z")!
+        let berlin = TimeZone(identifier: "Europe/Berlin")!
+        let nearMidnight = ISO8601DateFormatter().date(from: "2026-10-02T22:30:00Z")!
+        precondition(TripCalendar.dateKey(nearMidnight, zone: berlin) == "2026-10-03")
+        precondition(guide.calendars["DE"]?["2026-10-03"] == "German Unity Day")
+        precondition(guide.calendars["DE-HH"]?["2026-10-31"] == "Reformation Day")
+        precondition(guide.calendars["DE"]?["2026-10-31"] == nil)
+        precondition(guide.calendars["GB-ENG"]?["2026-12-28"]?.contains("observed") == true)
+        precondition(guide.calendars["DE"]?["2031-01-01"] == nil)
+        var first = card("Museum", day), second = card("Lunch", day.addingTimeInterval(3600))
+        var pin = CodableCoordinate(latitude: 53.54, longitude: 9.99)
+        pin.countryCode = "DE"
+        first.coordinate = pin
+        pin.countryCode = "DK"
+        second.coordinate = pin
+        precondition(TripCalendar.destinations([first, second], fallback: "DE-HH") == ["DE-HH", "DK"])
+        precondition(TripCalendar.destinations([], fallback: "GB") == ["GB"])
+        precondition(!OpeningTip.search("Sunday grocery Germany", destinations: ["US"]).isEmpty)
+        precondition(OpeningTip.search("", destinations: ["US"]).isEmpty)
+        let coord = pin.clLocationCoordinate2D
+        let transit = ScheduleViewModel.tripDirectionsRequest(from: coord, to: coord, mode: .transit, date: first.endDate, arriveBy: false)
+        precondition(transit?.transportType == .transit && transit?.departureDate == first.endDate && transit?.arrivalDate == nil)
+        let walk = ScheduleViewModel.tripDirectionsRequest(from: coord, to: coord, mode: .walking, date: first.startDate, arriveBy: true)
+        precondition(walk?.transportType == .walking && walk?.arrivalDate == first.startDate && walk?.departureDate == nil)
+        precondition(ScheduleViewModel.tripDirectionsRequest(from: nil, to: coord, mode: .transit, date: day, arriveBy: false) == nil)
+        print("Offline holidays, subdivisions, cross-border days, opening tips, timed transit and walking requests: passed")
     }
 
     static func card(_ title: String, _ start: Date, minutes: Int = 30,

@@ -7,6 +7,12 @@ struct NearbyBackup: Identifiable {
     var id: UUID { idea.id }
 }
 
+extension IdeaItem {
+    static func isIndoorTag(_ tag: String) -> Bool {
+        ["indoor", "indoors"].contains(tag.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+}
+
 extension EventItem {
     var canChangeForBackup: Bool { !isLocked && eventKitID == nil && schedulePrecision != .exactTime }
 }
@@ -21,7 +27,7 @@ extension ScheduleViewModel {
         return nil
     }
 
-    func nearbyBackups(for stop: EventItem, board: [IdeaItem], rainyOnly: Bool) -> [NearbyBackup] {
+    func nearbyBackups(for stop: EventItem, board: [IdeaItem], indoorsOnly: Bool) -> [NearbyBackup] {
         guard stop.canChangeForBackup, let origin = backupOrigin(for: stop, board: board) else { return [] }
         let placed = Set(events.map(\.ideaID))
         let sameDay = Set(events(on: stop.startDate).map(\.ideaID))
@@ -31,9 +37,7 @@ extension ScheduleViewModel {
             guard idea.id != stop.ideaID, idea.commitment != .locked, !sameDay.contains(idea.id),
                   idea.allowsMultipleScheduledInstances || !placed.contains(idea.id),
                   let pin = idea.coordinate, CLLocationCoordinate2DIsValid(pin.clLocationCoordinate2D) else { return nil }
-            if rainyOnly && !idea.tags.contains(where: {
-                ["indoor", "indoors", "rainy day", "rainy-day"].contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
-            }) { return nil }
+            if indoorsOnly && !idea.tags.contains(where: IdeaItem.isIndoorTag) { return nil }
             let duration = idea.duration ?? slot
             let end = stop.startDate.addingTimeInterval(duration)
             guard duration.isFinite, duration > 0, duration <= slot,
@@ -49,9 +53,9 @@ extension ScheduleViewModel {
 
     /// Recheck the live board and plan before replacing one rough placement.
     /// A new placement ID prevents old travel estimates following a different destination.
-    func useBackup(_ id: UUID, insteadOf stop: EventItem, board: [IdeaItem], rainyOnly: Bool) -> EventItem? {
+    func useBackup(_ id: UUID, insteadOf stop: EventItem, board: [IdeaItem], indoorsOnly: Bool) -> EventItem? {
         guard let index = events.firstIndex(of: stop),
-              let idea = nearbyBackups(for: stop, board: board, rainyOnly: rainyOnly).first(where: { $0.id == id })?.idea else { return nil }
+              let idea = nearbyBackups(for: stop, board: board, indoorsOnly: indoorsOnly).first(where: { $0.id == id })?.idea else { return nil }
         let duration = idea.duration ?? stop.endDate.timeIntervalSince(stop.startDate)
         let new = EventItem(ideaID: idea.id, title: idea.title, startDate: stop.startDate,
                             endDate: stop.startDate.addingTimeInterval(duration), coordinate: idea.coordinate,

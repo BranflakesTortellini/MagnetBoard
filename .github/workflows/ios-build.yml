@@ -53,7 +53,7 @@ jobs:
             iphone=$(xcrun simctl list devices available --json | python3 .github/scripts/select_iphone.py "$sdk")
             if [[ "$PROFILE" == "change-of-plans" ]]; then
               echo "UI_SUITE=ChangeOfPlansTests" >> "$GITHUB_ENV"
-              echo "EXPECTED_TESTS=1" >> "$GITHUB_ENV"
+              echo "EXPECTED_TESTS=2" >> "$GITHUB_ENV"
             else
               echo "UI_SUITE=CardJourneyTests" >> "$GITHUB_ENV"
               echo "EXPECTED_TESTS=8" >> "$GITHUB_ENV"
@@ -90,6 +90,8 @@ jobs:
         run: |
           info="$RUNNER_TEMP/magnetboard-derived-data/Build/Products/Debug-iphonesimulator/MagnetBoard.app/Info.plist"
           plutil -lint "$info"
+          test -s "$(dirname "$info")/TravelHolidays.json"
+          test -s "$(dirname "$info")/HolidayCalendarLicense.txt"
           /usr/libexec/PlistBuddy -c 'Print :NSCalendarsWriteOnlyAccessUsageDescription' "$info"
           /usr/libexec/PlistBuddy -c 'Print :NSCalendarsFullAccessUsageDescription' "$info"
           /usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations' "$info"
@@ -101,5 +103,5 @@ jobs:
             -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
             -target "$(uname -m)-apple-macosx14.0" \
             MagnetBoard/Models.swift MagnetBoard/BoardViewModel.swift MagnetBoard/ScheduleViewModel.swift \
-            MagnetBoard/NearbyBackups.swift Tests/HamburgWeekChecks.swift Tests/PlannerRegressionChecks.swift -o "$RUNNER_TEMP/planner-checks"
+            MagnetBoard/NearbyBackups.swift MagnetBoard/TripGuide.swift Tests/HamburgWeekChecks.swift Tests/PlannerRegressionChecks.swift -o "$RUNNER_TEMP/planner-checks"
           "$RUNNER_TEMP/planner-checks"
